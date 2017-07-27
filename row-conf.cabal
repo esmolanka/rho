@@ -1,0 +1,40 @@
+name:                row-conf
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/esmolanka/row-conf#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Eugene Smolanka
+maintainer:          esmolanka@gmail.com
+copyright:           Eugene Smolanka
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  ghc-options:         -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
+  exposed-modules:     Context
+                       Dsl
+                       Eval
+                       Pretty
+                       Sugared
+                       TypeChecker
+                       Types
+
+  build-depends:
+    base >= 4.7 && < 5, wl-pprint-text, containers, mtl, text,
+    recursion-schemes, free, sexp-grammar
+
+  default-language:    Haskell2010
+
+
+executable evalconf
+  main-is:             Main.hs
+  ghc-options:         -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
+  default-language:    Haskell2010
+  build-depends:
+    row-conf, base >= 4.7 && < 5, mtl, bytestring, text,
+    wl-pprint-text, sexp-grammar

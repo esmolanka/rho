@@ -489,18 +489,19 @@ typeSchemeOfConst = \case
     forall Star $ \b ->
     effect $ \e ->
     mono $
-      (b, Fix $ TRowExtend exceptionEff (Fix TPresent) b e) ~>
-      a
+      (a, Fix $ TRowExtend exceptionEff (Fix TPresent) a e) ~>
+      b
 
   Catch ->
     forall Star $ \a ->
     forall Star $ \b ->
     forall Star $ \c ->
+    forall Presence $ \p ->
     effect $ \e1 ->
     effect $ \e2 ->
     mono $
       ((Fix $ T TUnit, Fix $ TRowExtend exceptionEff (Fix TPresent) b e2) ~> a, e1) ~>
-      ((b, Fix $ TRowExtend exceptionEff (Fix TAbsent) c e2) ~> a, e2) ~>
+      ((b, Fix (TRowExtend exceptionEff p c e2)) ~> a, Fix (TRowExtend exceptionEff p c e2)) ~>
       a
 
   Total ->

@@ -16,7 +16,7 @@ ppTyVar (TyVar n k) = ppKind k <> int n
   where
     ppKind Star     = "α"
     ppKind Row      = "μ"
-    ppKind Presence = "θ"
+    ppKind Presence = "ω"
 
 ppBaseType :: BaseType -> Doc
 ppBaseType = fromString . drop 1 . show

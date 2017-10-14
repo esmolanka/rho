@@ -27,8 +27,8 @@ ppType = para $ \case
   TVar tv -> ppTyVar tv
   TArrow (f',f) (_,e) (_,a) ->
     case f' of
-      Fix (T TUnit) -> text "δ" <+> parens (a <+> angles e)
-      _other        -> parens (f <+> text "->" <+> a <+> angles e)
+      Fix (TArrow{}) -> parens f <+> "-⟨" <> e <> "⟩->" <+> a
+      _other         -> f <+>  "-⟨" <> e <> "⟩->" <+> a
 
   TList (_,a) -> brackets a
   TRecord (_,row) -> braces row

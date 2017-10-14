@@ -37,11 +37,11 @@ newTyVar kind = do
 
 instantiate :: forall m. (MonadState FreshSupply m) => TyScheme -> m Type
 instantiate TyScheme{..} = do
-  subst <- foldSubsts <$> mapM mkFreshVar tsForall
+  subst <- simultaneousSubst <$> mapM mkFreshVar tsForall
   return $ applySubst subst tsBody
   where
-    mkFreshVar :: TyVar -> m TySubst
-    mkFreshVar tv = singletonSubst <$> pure tv <*> newTyVar (tvKind tv)
+    mkFreshVar :: TyVar -> m (TyVar, Type)
+    mkFreshVar tv = (,) <$> pure tv <*> newTyVar (tvKind tv)
 
 generalize :: (MonadReader Context m) => Type -> m TyScheme
 generalize ty = do
@@ -238,7 +238,8 @@ runInfer =
   runExceptT
 
 showType :: Expr -> IO ()
-showType e =
+showType e = do
+  putStrLn ("checking expr:\n" ++ show e ++ "\n\n")
   case runInfer (inferExprType e) of
-    Left e   -> putStrLn ("typecheck error:\n" ++ show e)
+    Left err -> putStrLn ("typecheck error:\n" ++ show err)
     Right (ty,eff) -> putStrLn $ pp (ppType ty) ++ "\n" ++ pp (ppType eff)

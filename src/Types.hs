@@ -276,6 +276,9 @@ emptySubst = TySubst M.empty
 singletonSubst :: TyVar -> Type -> TySubst
 singletonSubst tv typ = TySubst (M.singleton tv typ)
 
+simultaneousSubst :: [(TyVar, Type)] -> TySubst
+simultaneousSubst subs = TySubst (M.fromList subs)
+
 composeSubst :: TySubst -> TySubst -> TySubst
 composeSubst (TySubst a) (TySubst b) =
   TySubst $ M.union

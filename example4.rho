@@ -1,0 +1,8 @@
+(let ([r (record
+          (:exception (delay (* (raise "Error") 20)))
+          (:io        (delay (+ (read) (read)))))]
+      [r2 (:sum r
+              :extend (delay (+ ((:io r)) ((:exception r)))))]
+      )
+  (:handled-exceptions r2
+   :extend (delay (catch (:sum r2) (lambda (err-msg) -1)))))

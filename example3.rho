@@ -1,0 +1,7 @@
+(let ([r (record
+          (:pure    (delay (* 10 20)))
+          (:partial (delay (/ 10 20)))
+          (:io      (delay (+ (read) (read)))))])
+
+  (:sum r :extend
+        (delay (+ (+ ((:pure r)) ((:partial r))) ((:io r))))))

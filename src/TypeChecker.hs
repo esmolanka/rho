@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -70,21 +71,24 @@ unify :: (MonadState FreshSupply m, MonadError TCError m) => Type -> Type -> m T
 unify (Fix l) (Fix r) =
   case (l, r) of
     (TVar x, TVar y) -> unifyVars x y
-    (TVar x, typ   ) -> x `unifyIs` Fix typ
-    (   typ, TVar y) -> y `unifyIs` Fix typ
-    (T    x, T    y) -> emptySubst <$ unifyBaseTypes x y
+    (TVar x, typ)    -> x `unifyIs` Fix typ
+    (typ,    TVar y) -> y `unifyIs` Fix typ
+    (T x,    T y)    -> emptySubst <$ unifyBaseTypes x y
+
+    (TList x,    TList y)    -> unify x y
+    (TRecord x,  TRecord y)  -> unify x y
+    (TVariant x, TVariant y) -> unify x y
+    (TPresent,   TPresent)   -> pure emptySubst
+    (TAbsent,    TAbsent)    -> pure emptySubst
     (TArrow a f x, TArrow b g y) -> do
       s1 <- unify a b
       s2 <- unify (applySubst s1 f) (applySubst s1 g)
       let s3 = s2 `composeSubst` s1
       s4 <- unify (applySubst s3 x) (applySubst s3 y)
       pure $ s4 `composeSubst` s3
-    (TList x,   TList y) -> unify x y
-    (TRecord x, TRecord y) -> unify x y
-    (TVariant x, TVariant y) -> unify x y
-    (TPresent,   TPresent) -> pure emptySubst
-    (TAbsent, TAbsent) -> pure emptySubst
-    (TRowEmpty, TRowEmpty) -> pure emptySubst
+
+    (TRowEmpty,  TRowEmpty) -> pure emptySubst
+
     (TRowExtend lbl pty fty tail, TRowExtend lbl' pty' fty' tail') -> do
       (pty'', fty'', tail'', s1) <- rewriteRow lbl lbl' pty' fty' tail'
       case getRowTail tail of
@@ -207,9 +211,26 @@ inferExprType expr = do
 
 type InferM = ExceptT TCError (StateT FreshSupply (Reader Context))
 
+primitives :: Context
+primitives =
+  Ctx.extend (Variable "cons")  (typeSchemeOfConst ListCons) $
+  Ctx.extend (Variable "nil")   (typeSchemeOfConst ListEmpty) $
+
+  Ctx.extend (Variable "read")  (typeSchemeOfConst Read) $
+  Ctx.extend (Variable "print") (typeSchemeOfConst Print) $
+  Ctx.extend (Variable "pure")  (typeSchemeOfConst Pure) $
+
+  Ctx.extend (Variable "*")     (typeSchemeOfConst Multiply) $
+  Ctx.extend (Variable "/")     (typeSchemeOfConst Divide) $
+
+  Ctx.extend (Variable "raise") (typeSchemeOfConst Raise) $
+  Ctx.extend (Variable "total") (typeSchemeOfConst Total) $
+  Ctx.extend (Variable "catch") (typeSchemeOfConst Catch) $
+  Ctx.empty
+
 runInfer :: InferM a -> Either TCError a
 runInfer =
-  flip runReader  Ctx.empty .
+  flip runReader primitives .
   flip evalStateT (FreshSupply 0) .
   runExceptT
 

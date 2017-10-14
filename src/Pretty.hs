@@ -21,27 +21,32 @@ ppTyVar (TyVar n k) = ppKind k <> int n
 ppBaseType :: BaseType -> Doc
 ppBaseType = fromString . drop 1 . show
 
-ppPresence :: Type -> Doc
-ppPresence (Fix TPresent) = "▪︎"
-ppPresence (Fix TAbsent) = "▫︎"
-ppPresence other = "‹" <> ppType other <> "›"
-
 ppType :: Type -> Doc
 ppType = para $ \case
   T c -> ppBaseType c
   TVar tv -> ppTyVar tv
-  TArrow (_,f) (_,e) (_,a) ->
-    parens (f <+> text "->" <+> a <+> "!" <+> angles e)
+  TArrow (f',f) (_,e) (_,a) ->
+    case f' of
+      Fix (T TUnit) -> text "δ" <+> parens (a <+> angles e)
+      _other        -> parens (f <+> text "->" <+> a <+> angles e)
+
   TList (_,a) -> brackets a
   TRecord (_,row) -> braces row
   TVariant (_,row) -> angles row
   TPresent -> "▪︎"
   TAbsent -> "▫︎"
   TRowEmpty -> text "∅"
-  TRowExtend (Label lbl) (p,_) (f',f) (t',t) ->
-    let field = case f' of
-          Fix (T TUnit) -> textStrict lbl <> ppPresence p
-          _             -> textStrict lbl <> ppPresence p <+> ":" <+> f
+  TRowExtend (Label lbl) (p',_) (f',f) (t',t) ->
+    let label = case p' of
+          Fix TPresent -> textStrict lbl
+          Fix TAbsent  -> "¬" <> textStrict lbl
+          other        -> textStrict lbl <> "‹" <> ppType other <> "›"
+
+        field = case (f', p') of
+          (Fix (T TUnit), _) -> label
+          (_, Fix TAbsent)   -> label
+          _                  -> label <+> ":" <+> f
+
     in case t' of
          Fix (TRowEmpty) -> field
          Fix (TVar{})    -> field <+> "|" <+> t

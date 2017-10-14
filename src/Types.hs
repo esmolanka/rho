@@ -60,9 +60,19 @@ data Const
   | VariantEmbed Label
   | VariantDecomp Label
 
+  | Delay
+
+  | Multiply
+  | Divide
+
+  | Print
+  | Read
+  | Pure -- limit IO effect
+
   | Raise
   | Catch
-  | Total
+
+  | Total -- no effects
   deriving (Show, Eq, Ord)
 
 type Expr = Fix ExprF
@@ -120,6 +130,7 @@ free x n0 expr = getAny $ runReader (cata alg expr) n0
         b' <- if x == x' then local succ b else b
         return $ e' <> b'
       other -> fold <$> sequence other
+
 
 shift :: Int -> Variable -> Expr -> Expr
 shift d x e = runReader (cata alg e) 0
@@ -278,7 +289,13 @@ domSubst tv (TySubst m) = M.member tv m
 -- Types DSL
 
 exceptionEff :: Label
-exceptionEff = Label (pack "exc")
+exceptionEff = Label (pack "exception")
+
+partialEff :: Label
+partialEff = Label (pack "partial")
+
+ioEff :: Label
+ioEff = Label (pack "io")
 
 forall :: Kind -> (Type -> TyScheme) -> TyScheme
 forall k f =
@@ -387,6 +404,49 @@ typeSchemeOfConst = \case
         (Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) b r, e4) ~>
         c, e4 ) ~>
       c
+
+  Delay ->
+    forall Star $ \a ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      ((Fix (T TUnit), e1) ~> a, e2) ~>
+      ((Fix (T TUnit), e1) ~> a)
+
+  Multiply ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TInt), e1) ~>
+      (Fix (T TInt), e2) ~>
+      (Fix (T TInt))
+
+  Divide ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TInt), e1) ~>
+      (Fix (T TInt), Fix $ TRowExtend partialEff (Fix TPresent) (Fix (T TUnit)) e2) ~>
+      (Fix (T TInt))
+
+  Read ->
+    effect $ \e1 ->
+    mono $
+      (Fix (T TUnit), Fix $ TRowExtend ioEff (Fix TPresent) (Fix (T TUnit)) e1) ~>
+      (Fix (T TInt))
+
+  Print ->
+    effect $ \e1 ->
+    mono $
+      (Fix (T TInt), Fix $ TRowExtend ioEff (Fix TPresent) (Fix (T TUnit)) e1) ~>
+      (Fix (T TUnit))
+
+  Pure ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    effect $ \e ->
+    mono $
+      ((Fix (T TUnit), Fix $ TRowExtend ioEff (Fix TAbsent) b e) ~> a, e) ~> a
 
   Raise ->
     forall Star $ \a ->

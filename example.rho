@@ -1,0 +1,22 @@
+(let
+    ( [some-record
+       (delay
+         (record
+          (:field1 [(/ 100 (read)) 42])))]
+
+      [x 42]
+
+      [map
+       (lambda (f xs)
+         (fold
+          (lambda (el acc) (cons (f el) acc))
+          []
+          xs))]
+
+      [sum
+       (fold + 0)])
+
+  (print
+   (sum
+    (map (+ x)
+         (:field1 (some-record))))))

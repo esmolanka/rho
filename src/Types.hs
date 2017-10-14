@@ -50,6 +50,7 @@ data Const
 
   | ListCons
   | ListEmpty
+  | ListFold
 
   | RecordEmpty
   | RecordSelect Label
@@ -62,6 +63,8 @@ data Const
 
   | Delay
 
+  | Add
+  | Subtract
   | Multiply
   | Divide
 
@@ -343,6 +346,20 @@ typeSchemeOfConst = \case
     effect $ \e2 ->
     mono $ (a, e1) ~> (Fix $ TList a, e2) ~> (Fix $ TList a)
 
+  ListFold ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    effect $ \e3 ->
+    effect $ \e4 ->
+    mono $
+      (((a, e1) ~> (b, e4) ~> b), e2) ~>
+      (b, e3) ~>
+      (Fix (TList a), e4) ~>
+      b
+
+
   RecordEmpty ->
     mono $ Fix $ TRecord $ Fix $ TRowEmpty
 
@@ -412,6 +429,22 @@ typeSchemeOfConst = \case
     mono $
       ((Fix (T TUnit), e1) ~> a, e2) ~>
       ((Fix (T TUnit), e1) ~> a)
+
+  Add ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TInt), e1) ~>
+      (Fix (T TInt), e2) ~>
+      (Fix (T TInt))
+
+  Subtract ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TInt), e1) ~>
+      (Fix (T TInt), e2) ~>
+      (Fix (T TInt))
 
   Multiply ->
     effect $ \e1 ->

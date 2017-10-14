@@ -10,19 +10,20 @@ import qualified Types as Raw
 import Types hiding (ExprF(..))
 
 import Control.Monad.Free
-import Data.Functor.Foldable (Fix(..), cata, futu)
+import Data.Functor.Foldable (Fix(..), futu)
 
 import Language.Sexp (Position)
 import Language.SexpGrammar
 import Language.SexpGrammar.Generic
 import Control.Category ((>>>))
-import Control.Monad.State.Strict
+-- import Control.Monad.State.Strict
 
 import Data.Text (Text)
-import Data.Semigroup
+-- import Data.Semigroup
 import Data.Coerce
 
 import GHC.Generics
+
 
 type Sugared = Fix SugaredF
 data SugaredF e
@@ -31,7 +32,10 @@ data SugaredF e
   | App    Position e e [e]
   | Let    Position (Variable, e) [(Variable, e)] e
   | MkList Position [e]
+  | MkInt  Position Integer
+  | MkBool Position Bool
     deriving (Generic)
+
 
 desugar :: Sugared -> Raw.Expr
 desugar = futu coalg
@@ -59,6 +63,13 @@ desugar = futu coalg
         in case elems of
              [] -> nil
              (x:xs) -> cons (Pure x) (foldr (\e rest -> Free $ cons (Pure e) rest) (Free nil) xs)
+
+      Fix (MkInt pos val) ->
+        Raw.Const pos (LitInt val)
+
+      Fix (MkBool pos val) ->
+        Raw.Const pos (LitBool val)
+
 
 ----------------------------------------------------------------------
 -- Grammars
@@ -125,6 +136,18 @@ sugaredGrammar = fixG $ match
              swap >>>
              vect (rest sugaredGrammar) >>>
              mkl)
+
+  $ With (\mki ->
+             position >>>
+             swap >>>
+             integer >>>
+             mki)
+
+  $ With (\mkb ->
+             position >>>
+             swap >>>
+             bool >>>
+             mkb)
 
   $ End
 

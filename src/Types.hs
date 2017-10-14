@@ -11,7 +11,7 @@ module Types where
 import Control.Arrow (first, second)
 import Control.Monad.Reader
 
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 import Data.Foldable
 import Data.Functor.Foldable (Fix(..), cata)
 import qualified Data.Map as M
@@ -25,10 +25,16 @@ import Language.Sexp (Position)
 -- Expressions
 
 newtype Variable = Variable Text
-    deriving (Show, Eq, Ord)
+    deriving (Eq, Ord)
+
+instance Show Variable where
+  showsPrec _ (Variable x) = showString (unpack x)
 
 newtype Label = Label Text
-    deriving (Show, Eq, Ord)
+    deriving (Eq, Ord)
+
+instance Show Label where
+  showsPrec _ (Label x) = showString "‹" . showString (unpack x) . showString "›"
 
 instance IsString Variable where
   fromString = Variable . fromString
@@ -57,11 +63,30 @@ data ExprF e
   | App    Position e e
   | Let    Position Variable e e
   | Const  Position Const
-  deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
 
 deriving instance {-# OVERLAPS #-} Eq (Fix ExprF)
 deriving instance {-# OVERLAPS #-} Ord (Fix ExprF)
-deriving instance {-# OVERLAPS #-} Show (Fix ExprF)
+
+instance Show e => Show (ExprF e) where
+  showsPrec n = \case
+    Var    _ x i   ->
+      showString "{" . showsPrec 11 x . (if i > 0 then showString "/" . showsPrec 11 i else id) . showString "}"
+    Lambda _ x e   ->
+      showParen (n >= 11)
+        (showString "λ" . showsPrec 11 x . showString " → " . showsPrec 11 e)
+    App    _ f a   ->
+      showParen (n >= 11)
+        (showsPrec 11 f . showString " " . showsPrec 11 a)
+    Let    _ x a b ->
+      showParen (n >= 11)
+        (showString "let " . showsPrec 11 x . showString " = " . showsPrec 11 a .
+         showString " in " . showsPrec 11 b)
+    Const  _ c     ->
+      (showsPrec 11 c)
+
+instance {-# OVERLAPS #-} Show (Fix ExprF) where
+  showsPrec n (Fix f) = showsPrec n f
 
 getPosition :: Expr -> Position
 getPosition (Fix x) = case x of
@@ -147,6 +172,7 @@ class Types a where
 data Kind
   = Star
   | Row
+  | Presence
   deriving (Show, Eq, Ord)
 
 data TyVar = TyVar
@@ -155,20 +181,25 @@ data TyVar = TyVar
   } deriving (Show, Eq, Ord)
 
 data BaseType
-  = TInt
+  = TUnit
+  | TInt
   | TBool
   deriving (Show, Eq, Ord)
 
 type Type = Fix TypeF
 data TypeF e
-  = TVar TyVar
-  | TConst BaseType
-  | TArrow e e
-  | TList e
-  | TRecord e
-  | TVariant e
-  | TRowEmpty
-  | TRowExtend Label e e
+  = TVar TyVar             -- κ
+  | T BaseType             -- STAR
+  | TArrow e e             -- STAR (STAR, STAR)
+  | TList e                -- STAR (STAR)
+  | TRecord e              -- STAR (ROW)
+  | TVariant e             -- STAR (ROW)
+
+  | TPresent               -- PRESENCE
+  | TAbsent                -- PRESENCE
+
+  | TRowEmpty              -- ROW ()
+  | TRowExtend Label e e e -- ROW (PRESENCE, STAR, ROW)
   deriving (Show, Eq, Ord, Functor, Foldable)
 
 instance Types Type where
@@ -190,7 +221,7 @@ instance Types Type where
 getRowTail :: Type -> Maybe TyVar
 getRowTail =
   cata $ \case
-    TRowExtend _ _ x -> x
+    TRowExtend _ _ _ x -> x
     TVar v -> Just v
     other -> msum other
 
@@ -258,10 +289,10 @@ a ~> b = Fix (TArrow a b)
 typeSchemeOfConst :: Const -> TyScheme
 typeSchemeOfConst = \case
   LitInt _ ->
-    mono $ Fix $ TConst $ TInt
+    mono $ Fix $ T $ TInt
 
   LitBool _ ->
-    mono $ Fix $ TConst $ TBool
+    mono $ Fix $ T $ TBool
 
   ListEmpty ->
     forall Star $ \a ->
@@ -277,35 +308,40 @@ typeSchemeOfConst = \case
   RecordSelect label ->
     forall Star $ \a ->
     forall Row  $ \r ->
-    mono $ (Fix $ TRecord $ Fix $ TRowExtend label a r) ~> a
+    mono $ (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r) ~> a
 
   RecordExtend label ->
     forall Star $ \a ->
+    forall Star $ \b ->
     forall Row  $ \r ->
     mono $
-      a ~> (Fix $ TRecord r) ~> (Fix $ TRecord $ Fix $ TRowExtend label a r)
+      a ~> (Fix $ TRecord $ Fix $ TRowExtend label (Fix TAbsent) b r) ~>
+           (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r)
 
   RecordRestrict label ->
     forall Star $ \a ->
+    forall Star $ \b ->
     forall Row  $ \r ->
     mono $
-      (Fix $ TRecord $ Fix $ TRowExtend label a r) ~> (Fix $ TRecord r)
+      (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r) ~> (Fix $ TRecord $ Fix $ TRowExtend label (Fix TAbsent) b r)
 
   VariantInject label  ->
     forall Star $ \a ->
     forall Row  $ \r ->
     mono $
-      a ~> (Fix $ TVariant $ Fix $ TRowExtend label a r)
+      a ~> (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) a r)
 
   VariantEmbed label   ->
-    forall Star $ \a ->
-    forall Row  $ \r ->
-    mono $
-      (Fix $ TVariant r) ~> (Fix $ TVariant $ Fix $ TRowExtend label a r)
-
-  VariantDecomp label  ->
     forall Star $ \a ->
     forall Star $ \b ->
     forall Row  $ \r ->
     mono $
-      (Fix $ TVariant $ Fix $ TRowExtend label a r) ~> ((a ~> b) ~> ((Fix $ TVariant r) ~> b) ~> b)
+      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) a r) ~> (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) b r)
+
+  VariantDecomp label  ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    forall Star $ \c ->
+    forall Row  $ \r ->
+    mono $
+      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) a r) ~> ((a ~> c) ~> ((Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) b r) ~> c)) ~> c

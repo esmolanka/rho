@@ -13,14 +13,13 @@ import Data.Functor.Foldable (cata, Fix (..))
 import qualified Data.Set as S
 
 import Types
-import Dsl
 import Context (Context)
 import qualified Context as Ctx
 import Pretty
 
 data TCError
   = CannotUnify Type Type
-  | CannotUnifyLabel Label Type
+  | CannotUnifyLabel Label Type Type
   | InfiniteType Type
   | RecursiveRowType Type
   | KindMismatch Kind Kind
@@ -54,7 +53,7 @@ generalize ty = do
 unifyBaseTypes :: (MonadState FreshSupply m, MonadError TCError m) => BaseType -> BaseType -> m ()
 unifyBaseTypes a b =
   unless (a == b) $
-    throwError (CannotUnify (Fix (TConst a)) (Fix (TConst b)))
+    throwError (CannotUnify (Fix (T a)) (Fix (T b)))
 
 unifyVars :: (MonadState FreshSupply m, MonadError TCError m) => TyVar -> TyVar -> m TySubst
 unifyVars a b = do
@@ -70,10 +69,10 @@ unifyIs tv typ
 unify :: (MonadState FreshSupply m, MonadError TCError m) => Type -> Type -> m TySubst
 unify (Fix l) (Fix r) =
   case (l, r) of
-    (TVar   x, TVar   y) -> unifyVars x y
-    (TVar   x, typ     ) -> x `unifyIs` Fix typ
-    (     typ, TVar   y) -> y `unifyIs` Fix typ
-    (TConst x, TConst y) -> emptySubst <$ unifyBaseTypes x y
+    (TVar x, TVar y) -> unifyVars x y
+    (TVar x, typ   ) -> x `unifyIs` Fix typ
+    (   typ, TVar y) -> y `unifyIs` Fix typ
+    (T    x, T    y) -> emptySubst <$ unifyBaseTypes x y
     (TArrow a x, TArrow b y) -> do
       s <- unify a b
       z <- unify (applySubst s x) (applySubst s y)
@@ -81,45 +80,55 @@ unify (Fix l) (Fix r) =
     (TList x,   TList y) -> unify x y
     (TRecord x, TRecord y) -> unify x y
     (TVariant x, TVariant y) -> unify x y
+    (TPresent,   TPresent) -> pure emptySubst
+    (TAbsent, TAbsent) -> pure emptySubst
     (TRowEmpty, TRowEmpty) -> pure emptySubst
-    (TRowExtend lbl fty tail, TRowExtend lbl' fty' tail') -> do
-      (fty'', tail'', s1) <- rewriteRow lbl lbl' fty' tail'
+    (TRowExtend lbl pty fty tail, TRowExtend lbl' pty' fty' tail') -> do
+      (pty'', fty'', tail'', s1) <- rewriteRow lbl lbl' pty' fty' tail'
       case getRowTail tail of
         Just r | domSubst r s1 ->
-                   throwError (RecursiveRowType (Fix (TRowExtend lbl' fty'' tail'')))
+                   throwError (RecursiveRowType (Fix (TRowExtend lbl' pty'' fty'' tail'')))
         _ -> do
-          s2 <- unify (applySubst s1 fty) (applySubst s1 fty'')
+          s2 <- unify (applySubst s1 pty) (applySubst s1 pty'')
           let s3 = composeSubst s2 s1
-          s4 <- unify (applySubst s3 tail) (applySubst s3 tail'')
-          return (composeSubst s4 s3)
+          s4 <- unify (applySubst s3 fty) (applySubst s3 fty'')
+          let s5 = composeSubst s4 s3
+          s6 <- unify (applySubst s5 tail) (applySubst s5 tail'')
+          return (composeSubst s6 s5)
 
-    (TRowEmpty, TRowExtend lbl _ _) ->
-      throwError $ CannotUnifyLabel lbl (Fix TRowEmpty)
+    (TRowEmpty, TRowExtend lbl p f r) ->
+      unify
+        (Fix (TRowExtend lbl (Fix TAbsent) f (Fix TRowEmpty)))
+        (Fix (TRowExtend lbl p f r))
 
-    (TRowExtend lbl _ _, TRowEmpty) ->
-      throwError $ CannotUnifyLabel lbl (Fix TRowEmpty)
+    (TRowExtend lbl p f r, TRowEmpty) ->
+      unify
+        (Fix (TRowExtend lbl p f r))
+        (Fix (TRowExtend lbl (Fix TAbsent) f (Fix TRowEmpty)))
 
     _ -> throwError $ CannotUnify (Fix l) (Fix r)
 
 rewriteRow
   :: (MonadState FreshSupply m, MonadError TCError m) =>
-     Label -> Label -> Type -> Type -> m (Type, Type, TySubst)
-rewriteRow newLbl lbl fty tail =
+     Label -> Label -> Type -> Type -> Type -> m (Type, Type, Type, TySubst)
+rewriteRow newLbl lbl pty fty tail =
   if newLbl == lbl
-  then return (fty, tail, emptySubst)
+  then return (pty, fty, tail, emptySubst)
   else
     case tail of
       Fix (TVar alpha) -> do
         beta  <- newTyVar Row
         gamma <- newTyVar Star
-        s     <- alpha `unifyIs` Fix (TRowExtend newLbl gamma beta)
-        return (gamma, applySubst s (Fix (TRowExtend lbl fty beta)), s)
-      Fix (TRowExtend lbl' fty' tail') -> do
-        (fty'', tail'', s) <- rewriteRow newLbl lbl' fty' tail'
-        return (fty'', Fix (TRowExtend lbl fty tail''), s)
+        theta <- newTyVar Presence
+        s     <- alpha `unifyIs` Fix (TRowExtend newLbl theta gamma beta)
+        return (theta, gamma, applySubst s (Fix (TRowExtend lbl pty fty beta)), s)
+      Fix (TRowExtend lbl' pty' fty' tail') -> do
+        (pty'', fty'', tail'', s) <- rewriteRow newLbl lbl' pty' fty' tail'
+        return (pty'', fty'', Fix (TRowExtend lbl pty fty tail''), s)
       Fix TRowEmpty -> do
-        throwError $ CannotUnifyLabel newLbl (Fix TRowEmpty)
-      other ->
+        gamma <- newTyVar Star
+        return (Fix TAbsent, gamma, Fix (TRowExtend lbl pty fty (Fix TRowEmpty)), emptySubst)
+      _other ->
         error $ "Unexpected type: " ++ show tail
 
 ----------------------------------------------------------------------
@@ -140,22 +149,22 @@ inferType = cata alg
           Just sigma -> do
             typ <- instantiate sigma
             return (emptySubst, typ)
-      Lambda pos x b -> do
+      Lambda _pos x b -> do
         tv <- newTyVar Star
         (s1, t1) <- Ctx.with x (TyScheme [] tv) b
         return (s1, Fix (TArrow (applySubst s1 tv) t1))
-      App pos f a -> do
+      App _pos f a -> do
         (sf, tf) <- f
         (sa, ta) <- Ctx.withSubst sf a
         tr <- newTyVar Star
         sr <- unify (applySubst sa tf) (Fix (TArrow ta tr))
         return (sr `composeSubst` sa `composeSubst` sf, applySubst sr tr)
-      Let pos x e b -> do
+      Let _pos x e b -> do
         (se, te) <- e
         scheme <- Ctx.withSubst se (generalize te)
         (sb, tb) <- Ctx.withSubst se $ Ctx.with x scheme $ b
         return (sb `composeSubst` se, tb)
-      Const pos c -> do
+      Const _pos c -> do
         typ <- instantiate $ typeSchemeOfConst c
         return (emptySubst, typ)
 
@@ -178,5 +187,5 @@ runInfer =
 showType :: Expr -> IO ()
 showType e =
   case runInfer (inferExprType e) of
-    Left e -> error (show e)
+    Left e   -> putStrLn ("typecheck error:\n" ++ show e)
     Right ty -> putStrLn $ pp (ppType ty)

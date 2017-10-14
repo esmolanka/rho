@@ -42,6 +42,8 @@ data SugaredF e
   | MkList  Position [e]
   | MkRec   Position [(Label, e)]
   | RecProj Position Label e
+  | RecExt  Position Label e e
+  | RecRst  Position Label e
   | Delay   Position e
   | Force   Position e
     deriving (Generic)
@@ -91,6 +93,16 @@ desugar = futu coalg
       Fix (RecProj pos label record) ->
         Raw.App pos
           (Free (Raw.Const pos (Raw.RecordSelect label)))
+          (Pure record)
+
+      Fix (RecExt pos label record payload) ->
+        Raw.App pos
+          (Free (Raw.App pos (Free (Raw.Const pos (Raw.RecordExtend label))) (Pure payload)))
+          (Pure record)
+
+      Fix (RecRst pos label record) ->
+        Raw.App pos
+          (Free (Raw.Const pos (Raw.RecordRestrict label)))
           (Pure record)
 
       Fix (Delay pos expr) ->
@@ -207,6 +219,25 @@ sugaredGrammar = fixG $ match
                el labelGrammar >>>
                el sugaredGrammar) >>>
              recprj)
+
+  $ With (\recext ->
+             position >>>
+             swap >>>
+             list (
+               el labelGrammar >>>
+               el sugaredGrammar >>>
+               el (kw (Kw "extend")) >>>
+               el sugaredGrammar) >>>
+             recext)
+
+  $ With (\recrest ->
+             position >>>
+             swap >>>
+             list (
+               el labelGrammar >>>
+               el sugaredGrammar >>>
+               el (kw (Kw "restrict"))) >>>
+             recrest)
 
   $ With (\delay ->
              position >>>

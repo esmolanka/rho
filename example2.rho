@@ -1,0 +1,21 @@
+(let
+    ( [map (lambda (f xs) (fold (lambda (el acc) (cons (f el) acc)) [] xs))]
+
+      [table
+        [ (record (:name "John") (:surname "Doe") (:age 42))
+          (record (:name "Jane") (:surname "Doe") (:age 7)) ] ] )
+
+  (record (:all-ages
+           (fold (lambda (rec ages) (+ (:age rec) ages)) 0 table))
+
+          (:anonymised
+           (cons
+            (record (:ssn -1) (:age 100))
+            (map (lambda (rec)
+                   (:ssn (:name (:surname rec :restrict) :restrict) :extend (read)))
+                 table)))
+
+          (:renamed
+           (map (lambda (rec)
+                  (:surname (:surname rec :restrict) :extend "Smith"))
+                table))))

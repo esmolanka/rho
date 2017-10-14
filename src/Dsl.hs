@@ -9,6 +9,12 @@ import Language.Sexp (dummyPos)
 lambda :: String -> Expr -> Expr
 lambda x body = Fix $ Lambda dummyPos (fromString x) body
 
+delay :: Expr -> Expr
+delay = lambda "_"
+
+force :: Expr -> Expr
+force e = app e [unit]
+
 app :: Expr -> [Expr] -> Expr
 app f a = foldl ((Fix .) . App dummyPos) f a
 
@@ -23,6 +29,12 @@ int n = Fix $ Const dummyPos $ LitInt n
 
 bool :: Bool -> Expr
 bool b = Fix $ Const dummyPos $ LitBool b
+
+str :: String -> Expr
+str s = Fix $ Const dummyPos $ LitStr s
+
+unit :: Expr
+unit = Fix $ Const dummyPos $ LitUnit
 
 rempty :: Expr
 rempty =  Fix $ Const dummyPos $ RecordEmpty
@@ -50,3 +62,12 @@ nil = Fix $ Const dummyPos $ ListEmpty
 
 cons :: Fix ExprF
 cons = Fix $ Const dummyPos $ ListCons
+
+raise :: Fix ExprF
+raise = Fix $ Const dummyPos $ Raise
+
+catch :: Fix ExprF
+catch = Fix $ Const dummyPos $ Catch
+
+total :: Fix ExprF
+total = Fix $ Const dummyPos $ Total

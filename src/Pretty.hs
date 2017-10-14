@@ -30,7 +30,8 @@ ppType :: Type -> Doc
 ppType = para $ \case
   T c -> ppBaseType c
   TVar tv -> ppTyVar tv
-  TArrow (_,f) (_,a) -> parens (f <+> text "->" <+> a)
+  TArrow (_,f) (_,e) (_,a) ->
+    parens (f <+> text "->" <+> a <+> "!" <+> angles e)
   TList (_,a) -> brackets a
   TRecord (_,row) -> braces row
   TVariant (_,row) -> angles row

@@ -73,10 +73,12 @@ unify (Fix l) (Fix r) =
     (TVar x, typ   ) -> x `unifyIs` Fix typ
     (   typ, TVar y) -> y `unifyIs` Fix typ
     (T    x, T    y) -> emptySubst <$ unifyBaseTypes x y
-    (TArrow a x, TArrow b y) -> do
-      s <- unify a b
-      z <- unify (applySubst s x) (applySubst s y)
-      pure $ z `composeSubst` s
+    (TArrow a f x, TArrow b g y) -> do
+      s1 <- unify a b
+      s2 <- unify (applySubst s1 f) (applySubst s1 g)
+      let s3 = s2 `composeSubst` s1
+      s4 <- unify (applySubst s3 x) (applySubst s3 y)
+      pure $ s4 `composeSubst` s3
     (TList x,   TList y) -> unify x y
     (TRecord x, TRecord y) -> unify x y
     (TVariant x, TVariant y) -> unify x y
@@ -137,10 +139,10 @@ rewriteRow newLbl lbl pty fty tail =
 inferType
   :: forall m. (MonadState FreshSupply m, MonadReader Context m, MonadError TCError m) =>
      Expr
-  -> m (TySubst, Type)
+  -> m (TySubst, Type, Type)
 inferType = cata alg
   where
-    alg :: ExprF (m (TySubst, Type)) -> m (TySubst, Type)
+    alg :: ExprF (m (TySubst, Type, Type)) -> m (TySubst, Type, Type)
     alg = \case
       Var pos x n -> do
         mts <- asks (Ctx.lookup x n)
@@ -148,33 +150,60 @@ inferType = cata alg
           Nothing -> throwError (VariableNotFound (Fix (Var pos x n)))
           Just sigma -> do
             typ <- instantiate sigma
-            return (emptySubst, typ)
+            eff <- newTyVar Row
+            return
+              ( emptySubst
+              , typ
+              , eff
+              )
+
       Lambda _pos x b -> do
         tv <- newTyVar Star
-        (s1, t1) <- Ctx.with x (TyScheme [] tv) b
-        return (s1, Fix (TArrow (applySubst s1 tv) t1))
+        (s1, t1, eff1) <- Ctx.with x (TyScheme [] tv) b
+        eff <- newTyVar Row
+        return
+          ( s1
+          , Fix (TArrow (applySubst s1 tv) eff1 t1)
+          , eff
+          )
+
       App _pos f a -> do
-        (sf, tf) <- f
-        (sa, ta) <- Ctx.withSubst sf a
+        (sf, tf, eff1) <- f
+        (sa, ta, eff2) <- Ctx.withSubst sf a
         tr <- newTyVar Star
-        sr <- unify (applySubst sa tf) (Fix (TArrow ta tr))
-        return (sr `composeSubst` sa `composeSubst` sf, applySubst sr tr)
+        sr <- unify (applySubst sa tf) (Fix (TArrow ta eff2 tr))
+        se <- unify (applySubst (sr `composeSubst` sa) eff1) (applySubst sr eff2)
+        return
+          ( se `composeSubst` sr `composeSubst` sa `composeSubst` sf
+          , applySubst (se `composeSubst` sr) tr
+          , applySubst (se `composeSubst` sr) eff2
+          )
+
       Let _pos x e b -> do
-        (se, te) <- e
-        scheme <- Ctx.withSubst se (generalize te)
-        (sb, tb) <- Ctx.withSubst se $ Ctx.with x scheme $ b
-        return (sb `composeSubst` se, tb)
+        (se, te, eff1) <- e
+        sf <- unify eff1 (Fix TRowEmpty)
+        (sb, tb, eff2) <- Ctx.withSubst (sf `composeSubst` se) $ do
+          scheme <- generalize te
+          Ctx.with x scheme $ b
+        return
+          ( sb `composeSubst` sf `composeSubst` se
+          , tb
+          , eff2
+          )
+
       Const _pos c -> do
         typ <- instantiate $ typeSchemeOfConst c
-        return (emptySubst, typ)
+        eff <- newTyVar Row
+        return (emptySubst, typ, eff)
+
 
 inferExprType
   :: forall m. (MonadState FreshSupply m, MonadReader Context m, MonadError TCError m) =>
      Expr
-  -> m Type
+  -> m (Type, Type)
 inferExprType expr = do
-  (se, te) <- inferType expr
-  return (applySubst se te)
+  (se, te, fe) <- inferType expr
+  return (applySubst se te, applySubst se fe)
 
 type InferM = ExceptT TCError (StateT FreshSupply (Reader Context))
 
@@ -188,4 +217,4 @@ showType :: Expr -> IO ()
 showType e =
   case runInfer (inferExprType e) of
     Left e   -> putStrLn ("typecheck error:\n" ++ show e)
-    Right ty -> putStrLn $ pp (ppType ty)
+    Right (ty,eff) -> putStrLn $ pp (ppType ty) ++ "\n" ++ pp (ppType eff)

@@ -11,7 +11,7 @@ module Types where
 import Control.Arrow (first, second)
 import Control.Monad.Reader
 
-import Data.Text (Text, unpack)
+import Data.Text (Text, pack, unpack)
 import Data.Foldable
 import Data.Functor.Foldable (Fix(..), cata)
 import qualified Data.Map as M
@@ -45,15 +45,24 @@ instance IsString Label where
 data Const
   = LitInt  Integer
   | LitBool Bool
+  | LitStr  String
+  | LitUnit
+
   | ListCons
   | ListEmpty
+
   | RecordEmpty
   | RecordSelect Label
   | RecordExtend Label
   | RecordRestrict Label
+
   | VariantInject Label
   | VariantEmbed Label
   | VariantDecomp Label
+
+  | Raise
+  | Catch
+  | Total
   deriving (Show, Eq, Ord)
 
 type Expr = Fix ExprF
@@ -184,13 +193,14 @@ data BaseType
   = TUnit
   | TInt
   | TBool
+  | TString
   deriving (Show, Eq, Ord)
 
 type Type = Fix TypeF
 data TypeF e
   = TVar TyVar             -- κ
   | T BaseType             -- STAR
-  | TArrow e e             -- STAR (STAR, STAR)
+  | TArrow e e e           -- STAR (STAR, ROW, STAR)
   | TList e                -- STAR (STAR)
   | TRecord e              -- STAR (ROW)
   | TVariant e             -- STAR (ROW)
@@ -267,6 +277,9 @@ domSubst tv (TySubst m) = M.member tv m
 ----------------------------------------------------------------------
 -- Types DSL
 
+exceptionEff :: Label
+exceptionEff = Label (pack "exc")
+
 forall :: Kind -> (Type -> TyScheme) -> TyScheme
 forall k f =
   let TyScheme bs ty = f (Fix (TVar tv))
@@ -276,13 +289,16 @@ forall k f =
       tv = TyVar n k
   in  TyScheme (tv : bs) ty
 
+effect :: (Type -> TyScheme) -> TyScheme
+effect f = forall Row f
+
 mono :: Type -> TyScheme
 mono ty = TyScheme [] ty
 
 infixr 3 ~>
 
-(~>) :: Type -> Type -> Type
-a ~> b = Fix (TArrow a b)
+(~>) :: (Type, Type) -> Type -> Type
+(a, e) ~> b = Fix (TArrow a e b)
 
 ----------------------------------------------------------------------
 
@@ -294,13 +310,21 @@ typeSchemeOfConst = \case
   LitBool _ ->
     mono $ Fix $ T $ TBool
 
+  LitStr _ ->
+    mono $ Fix $ T $ TString
+
+  LitUnit ->
+    mono $ Fix $ T $ TUnit
+
   ListEmpty ->
     forall Star $ \a ->
     mono $ (Fix $ TList a)
 
   ListCons ->
     forall Star $ \a ->
-    mono $ a ~> (Fix $ TList a) ~> (Fix $ TList a)
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $ (a, e1) ~> (Fix $ TList a, e2) ~> (Fix $ TList a)
 
   RecordEmpty ->
     mono $ Fix $ TRecord $ Fix $ TRowEmpty
@@ -308,40 +332,83 @@ typeSchemeOfConst = \case
   RecordSelect label ->
     forall Star $ \a ->
     forall Row  $ \r ->
-    mono $ (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r) ~> a
+    effect $ \e ->
+    mono $ (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r, e) ~> a
 
   RecordExtend label ->
     forall Star $ \a ->
     forall Star $ \b ->
     forall Row  $ \r ->
+    effect $ \e1 ->
+    effect $ \e2 ->
     mono $
-      a ~> (Fix $ TRecord $ Fix $ TRowExtend label (Fix TAbsent) b r) ~>
-           (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r)
+      (a, e1) ~>
+      (Fix $ TRecord $ Fix $ TRowExtend label (Fix TAbsent) b r, e2) ~>
+      (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r)
 
   RecordRestrict label ->
     forall Star $ \a ->
     forall Star $ \b ->
     forall Row  $ \r ->
+    effect $ \e ->
     mono $
-      (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r) ~> (Fix $ TRecord $ Fix $ TRowExtend label (Fix TAbsent) b r)
+      (Fix $ TRecord $ Fix $ TRowExtend label (Fix TPresent) a r, e) ~>
+      (Fix $ TRecord $ Fix $ TRowExtend label (Fix TAbsent) b r)
 
   VariantInject label  ->
     forall Star $ \a ->
     forall Row  $ \r ->
+    effect $ \e ->
     mono $
-      a ~> (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) a r)
+      (a, e) ~>
+      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) a r)
 
   VariantEmbed label   ->
     forall Star $ \a ->
     forall Star $ \b ->
     forall Row  $ \r ->
+    effect $ \e ->
     mono $
-      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) a r) ~> (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) b r)
+      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) a r, e) ~>
+      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) b r)
 
-  VariantDecomp label  ->
+  VariantDecomp label ->
     forall Star $ \a ->
     forall Star $ \b ->
     forall Star $ \c ->
     forall Row  $ \r ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    effect $ \e3 ->
+    effect $ \e4 ->
     mono $
-      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) a r) ~> ((a ~> c) ~> ((Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) b r) ~> c)) ~> c
+      (Fix $ TVariant $ Fix $ TRowExtend label (Fix TPresent) a r, e1) ~>
+      ( ((a, e2) ~> c, e3) ~>
+        (Fix $ TVariant $ Fix $ TRowExtend label (Fix TAbsent) b r, e4) ~>
+        c, e4 ) ~>
+      c
+
+  Raise ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    effect $ \e ->
+    mono $
+      (b, Fix $ TRowExtend exceptionEff (Fix TPresent) b e) ~>
+      a
+
+  Catch ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    forall Star $ \c ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      ((Fix $ T TUnit, Fix $ TRowExtend exceptionEff (Fix TPresent) b e2) ~> a, e1) ~>
+      ((b, Fix $ TRowExtend exceptionEff (Fix TAbsent) c e2) ~> a, e2) ~>
+      a
+
+  Total ->
+    forall Star $ \a ->
+    effect $ \e ->
+    mono $
+      ((Fix (T TUnit), Fix TRowEmpty) ~> a, e) ~> a

@@ -1,13 +1,13 @@
 (let ([proc
        (block
-        (raise "Wooot")
-        (= :foo (read))
-        (print 42)
-        (print (/ 10 5))
-        (? :foo)
+        (raise "Wooot")    ;; raise an exception of type String
+        (= :foo (read))    ;; read value from stdin and store to a state variable
+        (print 42)         ;; print The Answer
+        (print (/ 10 5))   ;; print some fractions, invoking a partial function
+        (? :foo)           ;; load value from the state variable
         )])
-  (proc))
 
+  (proc))
 
 ;; TYPE:
 ;;

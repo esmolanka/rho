@@ -1,0 +1,9 @@
+(let ([proc
+       (block
+        (raise "Wooot")
+        (=: :foo (read))
+        (print 42)
+        (print (/ 10 5))
+        (? :foo)
+        )])
+  (proc))

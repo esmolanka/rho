@@ -1,0 +1,15 @@
+
+;; Imperative version of factorial function
+
+(lambda (n)
+  (run-state
+   (block
+     (= :n n)
+     (= :acc 1)
+     (fix
+      (lambda (repeat)
+        ((block
+          (= :acc (* (? :acc) (? :n)))
+          (= :n (- (? :n) 1))
+          (if (> (? :n) 0) repeat (delay ()))))))
+     (? :acc))))

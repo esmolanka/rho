@@ -11,4 +11,3 @@
   (record
    (:sugared factorial)
    (:desugared factorial-desugared)))
-

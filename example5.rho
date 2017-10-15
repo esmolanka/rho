@@ -7,3 +7,14 @@
         (? :foo)
         )])
   (proc))
+
+
+;; TYPE:
+;;
+;;   Int
+;;
+;;   < exception : String
+;;   , io
+;;   , state : { foo : Int | μ102 }
+;;   , partial | μ101
+;;   >

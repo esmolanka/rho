@@ -1,0 +1,14 @@
+(let
+    ([:rec factorial (n) (* n (if (> n 0) (factorial (- n 1)) 1))]
+     [factorial-desugared
+      (lambda (n)
+        ((fix (lambda (factorial n)
+                (* n
+                   (if (> n 0)
+                       (factorial (- n 1))
+                       1)
+                   ))) n))])
+  (record
+   (:sugared factorial)
+   (:desugared factorial-desugared)))
+

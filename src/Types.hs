@@ -76,6 +76,11 @@ data Const
   | Catch
 
   | Total -- no effects
+
+  | Sequence
+
+  | Store Label
+  | Load Label
   deriving (Show, Eq, Ord)
 
 type Expr = Fix ExprF
@@ -303,6 +308,9 @@ partialEff = Label (pack "partial")
 ioEff :: Label
 ioEff = Label (pack "io")
 
+stateEff :: Label
+stateEff = Label (pack "state")
+
 forall :: Kind -> (Type -> TyScheme) -> TyScheme
 forall k f =
   let TyScheme bs ty = f (Fix (TVar tv))
@@ -509,3 +517,30 @@ typeSchemeOfConst = \case
     effect $ \e ->
     mono $
       ((Fix (T TUnit), Fix TRowEmpty) ~> a, e) ~> a
+
+  Sequence ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    effect $ \e ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      ((Fix (T TUnit), e) ~> a, e1) ~>
+      ((Fix (T TUnit), e) ~> b, e2) ~>
+      ((Fix (T TUnit), e) ~> b)
+
+  Store lbl ->
+    forall Star $ \a ->
+    forall Row $ \r ->
+    effect $ \e ->
+    mono $
+      let r' = Fix $ TRowExtend lbl (Fix TPresent) a $ r
+      in (a, Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r') e) ~> Fix (T TUnit)
+
+  Load lbl ->
+    forall Star $ \a ->
+    forall Row $ \r ->
+    effect $ \e ->
+    mono $
+      let r' = Fix $ TRowExtend lbl (Fix TPresent) a $ r
+      in (Fix (T TUnit), Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r') e) ~> a

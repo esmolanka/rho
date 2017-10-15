@@ -71,3 +71,6 @@ catch = Fix $ Const dummyPos $ Catch
 
 total :: Fix ExprF
 total = Fix $ Const dummyPos $ Total
+
+sequence :: Fix ExprF
+sequence = Fix $ Const dummyPos $ Sequence

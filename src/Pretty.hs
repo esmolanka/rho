@@ -23,7 +23,7 @@ ppBaseType :: BaseType -> Doc
 ppBaseType = fromString . drop 1 . show
 
 ppType :: Type -> Doc
-ppType = para $ \case
+ppType = (group .) . para $ \case
   T c -> ppBaseType c
   TVar tv -> ppTyVar tv
   TArrow (f',f) (_,e) (_,a) ->

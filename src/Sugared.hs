@@ -46,6 +46,9 @@ data SugaredF e
   | RecRst  Position Label e
   | Delay   Position e
   | Force   Position e
+  | Block   Position [e]
+  | Store   Position Label e
+  | Load    Position Label
     deriving (Generic)
 
 
@@ -115,6 +118,28 @@ desugar = futu coalg
           (Pure expr)
           (Free (Raw.Const pos Raw.LitUnit))
 
+      Fix (Block pos stmts) ->
+        case stmts of
+          [] -> error "Woot"
+          (x : xs) ->
+            let block = foldl
+                  (\blk stmt ->
+                      Free (Raw.App pos
+                             (Free (Raw.App pos (Free (Raw.Const pos Raw.Sequence)) blk))
+                             (Free (Raw.Lambda pos (Variable "_") (Pure stmt)))))
+                  (Free (Raw.Lambda pos (Variable "_") (Pure x))) xs
+            in case block of
+                 Free x -> x
+                 Pure{} -> error "Woot"
+
+      Fix (Store pos label payload) ->
+        Raw.App pos (Free (Raw.Const pos (Raw.Store label))) (Pure payload)
+
+      Fix (Load pos label) ->
+        Raw.App pos
+          (Free (Raw.Const pos (Raw.Load label)))
+          (Free (Raw.Const pos Raw.LitUnit))
+
 
 ----------------------------------------------------------------------
 -- Grammars
@@ -126,12 +151,9 @@ varGrammar =
   where
     parseVar :: Text -> Either Mismatch Variable
     parseVar t =
-      case t of
-        "lambda" -> Left (unexpected t)
-        "let"    -> Left (unexpected t)
-        "record" -> Left (unexpected t)
-        "delay"  -> Left (unexpected t)
-        other    -> Right (Variable other)
+      if t `elem` ["lambda","let","record","delay","block","=:","?"]
+      then Left (unexpected t)
+      else Right (Variable t)
 
 
 labelGrammar :: SexpG Label
@@ -252,8 +274,42 @@ sugaredGrammar = fixG $ match
              list (el sugaredGrammar) >>>
              force)
 
+  $ With (\block ->
+             position >>>
+             swap >>>
+             list (el (sym "block") >>>
+                   el sugaredGrammar >>>
+                   rest sugaredGrammar >>>
+                   swap >>> pair >>> cons) >>>
+             block)
+
+  $ With (\store ->
+             position >>>
+             swap >>>
+             list (el (sym "=:") >>>
+                   el labelGrammar >>>
+                   el sugaredGrammar) >>>
+             store)
+
+  $ With (\load ->
+             position >>>
+             swap >>>
+             list (el (sym "?") >>>
+                   el labelGrammar) >>>
+             load)
+
   $ End
 
+
+cons :: Grammar g (([a], a) :- t) ([a] :- t)
+cons = partialIso "list" to from
+  where
+    from :: [a] -> Either Mismatch ([a], a)
+    from [] = Left (unexpected "empty list")
+    from (x:xs) = Right (xs, x)
+
+    to :: ([a], a) -> [a]
+    to = uncurry $ flip (:)
 
 ----------------------------------------------------------------------
 -- Utils

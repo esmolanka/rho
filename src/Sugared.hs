@@ -32,13 +32,19 @@ data Literal
   | LitUnit
     deriving (Generic)
 
+data LetBinding e
+  = OrdinaryBinding Variable e
+  | RecursiveBinding Variable Variable [Variable] e
+    deriving (Generic)
+
 type Sugared = Fix SugaredF
 data SugaredF e
   = Var     Position Variable
   | Lambda  Position Variable [Variable] e
   | App     Position e e [e]
-  | Let     Position (Variable, e) [(Variable, e)] e
+  | Let     Position (LetBinding e) [(LetBinding e)] e
   | Literal Position Literal
+  | If      Position e e e
   | MkList  Position [e]
   | MkRec   Position [(Label, e)]
   | RecProj Position Label e
@@ -55,22 +61,38 @@ data SugaredF e
 desugar :: Sugared -> Raw.Expr
 desugar = futu coalg
   where
+    dummyVar = Variable "$"
+
+    mkLambda pos bindings e =
+      foldr (\b' rest -> Free $ Raw.Lambda pos b' rest) e bindings
+
+    mkApp pos f args =
+      foldl (\acc arg -> Free $ Raw.App pos acc arg) f args
+
+
     coalg :: Sugared -> Raw.ExprF (Free Raw.ExprF Sugared)
     coalg = \case
-      Fix (Var pos var) ->
-        Raw.Var pos var 0
+      Fix (Var pos var)       -> Raw.Var pos var 0
 
-      Fix (Lambda pos b bs e) ->
-        Raw.Lambda pos b
-          (foldr (\b' rest -> Free $ Raw.Lambda pos b' rest) (Pure e) bs)
+      Fix (Lambda pos b bs e) -> let Free x = mkLambda pos (b:bs) (Pure e) in x
 
-      Fix (App pos f a bs) ->
-        let Free ap = foldl (\acc arg -> Free $ Raw.App pos acc (Pure arg)) (Pure f) (a:bs)
-        in ap
+      Fix (App pos f a as)    -> let Free x = mkApp pos (Pure f) (map Pure (a:as)) in x
 
-      Fix (Let pos (b, be) bs e) ->
-        Raw.Let pos b (Pure be)
-          (foldr (\(b', be') rest -> Free $ Raw.Let pos b' (Pure be') rest) (Pure e) bs)
+      Fix (Let pos b bs e) ->
+        let (name, expr) = desugarBinding b
+        in Raw.Let pos name expr
+             (foldr (\(name, expr) rest -> Free $ Raw.Let pos name expr rest) (Pure e) (map desugarBinding bs))
+        where
+          desugarBinding :: LetBinding Sugared -> (Variable, Free Raw.ExprF Sugared)
+          desugarBinding = \case
+            OrdinaryBinding  n expr -> (n, Pure expr)
+            RecursiveBinding n var vars expr -> (n, body)
+              where
+                avs = map (const dummyVar) (var:vars)
+                refs = reverse $ zipWith (\var n -> Free $ Raw.Var pos var n) avs [0..]
+                body = mkLambda pos avs $ mkApp pos fixpoint (innerBody:refs)
+                fixpoint = Free $ Raw.Const pos Raw.Fixpoint
+                innerBody = mkLambda pos (n:var:vars) (Pure expr)
 
       Fix (Literal pos lit) ->
         case lit of
@@ -78,6 +100,15 @@ desugar = futu coalg
           LitBool x -> Raw.Const pos (Raw.LitBool x)
           LitStr  x -> Raw.Const pos (Raw.LitStr  x)
           LitUnit   -> Raw.Const pos Raw.LitUnit
+
+      Fix (If pos cond tr fls) ->
+        let Free x =
+              mkApp pos (Free $ Raw.Const pos Raw.If)
+                [ Pure cond
+                , mkLambda pos [dummyVar] (Pure tr)
+                , mkLambda pos [dummyVar] (Pure fls)
+                ]
+        in x
 
       Fix (MkList pos elems) ->
         let nil = Raw.Const pos Raw.ListEmpty
@@ -151,7 +182,7 @@ varGrammar =
   where
     parseVar :: Text -> Either Mismatch Variable
     parseVar t =
-      if t `elem` ["lambda","let","record","delay","block","=","?"]
+      if t `elem` ["lambda","let","if","record","delay","block","=","?"]
       then Left (unexpected t)
       else Right (Variable t)
 
@@ -160,13 +191,22 @@ labelGrammar :: SexpG Label
 labelGrammar = keyword >>> iso coerce coerce
 
 
-bindingGrammar :: SexpG (Variable, Sugared)
-bindingGrammar =
-  vect (
-    el varGrammar >>>
-    el sugaredGrammar >>>
-    pair
-  )
+bindingGrammar :: SexpG (LetBinding Sugared)
+bindingGrammar = match
+  $ With (\ordinary ->
+            vect (
+             el varGrammar >>>
+             el sugaredGrammar) >>>
+            ordinary
+         )
+  $ With (\recursive ->
+            vect (
+             el (kw (Kw "rec")) >>>
+             el varGrammar >>>
+             el (list (el varGrammar >>> rest varGrammar)) >>>
+             el sugaredGrammar) >>>
+            recursive)
+  $ End
 
 
 litGrammar :: SexpG Literal
@@ -220,6 +260,16 @@ sugaredGrammar = fixG $ match
              swap >>>
              litGrammar >>>
              mklit)
+
+  $ With (\ifp ->
+            position >>>
+            swap >>>
+            list (
+             el (sym "if") >>>
+             el sugaredGrammar >>>
+             el sugaredGrammar >>>
+             el sugaredGrammar) >>>
+            ifp)
 
   $ With (\mklst ->
              position >>>

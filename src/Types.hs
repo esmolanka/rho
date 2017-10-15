@@ -42,6 +42,15 @@ instance IsString Variable where
 instance IsString Label where
   fromString = Label . fromString
 
+data CmpOp
+  = CmpLT
+  | CmpGT
+  | CmpLE
+  | CmpGE
+  | CmpEq
+  | CmpNE
+  deriving (Show, Eq, Ord)
+
 data Const
   = LitInt  Integer
   | LitBool Bool
@@ -68,6 +77,14 @@ data Const
   | Multiply
   | Divide
 
+  | Compare CmpOp
+
+  | And
+  | Or
+  | Not
+
+  | If
+
   | Print
   | Read
   | Pure -- limit IO effect
@@ -81,6 +98,9 @@ data Const
 
   | Store Label
   | Load Label
+  | RunState
+
+  | Fixpoint
   deriving (Show, Eq, Ord)
 
 type Expr = Fix ExprF
@@ -311,6 +331,9 @@ ioEff = Label (pack "io")
 stateEff :: Label
 stateEff = Label (pack "state")
 
+recEff :: Label
+recEff = Label (pack "recursive")
+
 forall :: Kind -> (Type -> TyScheme) -> TyScheme
 forall k f =
   let TyScheme bs ty = f (Fix (TVar tv))
@@ -473,6 +496,47 @@ typeSchemeOfConst = \case
       (Fix (T TInt), Fix $ TRowExtend partialEff (Fix TPresent) (Fix (T TUnit)) e2) ~>
       (Fix (T TInt))
 
+  Compare _ ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TInt), e1) ~>
+      (Fix (T TInt), e2) ~>
+      (Fix (T TBool))
+
+  And ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TBool), e1) ~>
+      (Fix (T TBool), e2) ~>
+      (Fix (T TBool))
+
+  Or ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    mono $
+      (Fix (T TBool), e1) ~>
+      (Fix (T TBool), e2) ~>
+      (Fix (T TBool))
+
+  Not ->
+    effect $ \e1 ->
+    mono $
+      (Fix (T TBool), e1) ~>
+      (Fix (T TBool))
+
+  If ->
+    forall Star $ \a ->
+    effect $ \e1 ->
+    effect $ \e2 ->
+    effect $ \e3 ->
+    mono $
+      (Fix (T TBool), e1) ~>
+      ((Fix (T TUnit), e3) ~> a, e2) ~>
+      ((Fix (T TUnit), e3) ~> a, e3) ~>
+      a
+
   Read ->
     effect $ \e1 ->
     mono $
@@ -544,3 +608,24 @@ typeSchemeOfConst = \case
     mono $
       let r' = Fix $ TRowExtend lbl (Fix TPresent) a $ r
       in (Fix (T TUnit), Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r') e) ~> a
+
+  RunState ->
+    forall Star $ \a ->
+    forall Star $ \b ->
+    forall Row $ \r ->
+    forall Presence $ \p ->
+    effect $ \e ->
+    mono $
+      ( (Fix (T TUnit)
+        , Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r) e) ~> a
+      , Fix $ TRowExtend stateEff p b e
+      ) ~>
+      a
+
+  Fixpoint ->
+    forall Star $ \a ->
+    effect $ \e ->
+      mono $
+        ( (a, e) ~> a
+        , Fix $ TRowExtend recEff (Fix TPresent) (Fix (T TUnit)) e
+        ) ~> a

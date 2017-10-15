@@ -226,9 +226,21 @@ primitives =
   Ctx.extend (Variable "*")     (typeSchemeOfConst Multiply) $
   Ctx.extend (Variable "/")     (typeSchemeOfConst Divide) $
 
+  Ctx.extend (Variable "<")     (typeSchemeOfConst (Compare CmpLT)) $
+  Ctx.extend (Variable "<=")    (typeSchemeOfConst (Compare CmpLE)) $
+  Ctx.extend (Variable ">")     (typeSchemeOfConst (Compare CmpGT)) $
+  Ctx.extend (Variable ">=")    (typeSchemeOfConst (Compare CmpGE)) $
+  Ctx.extend (Variable "==")    (typeSchemeOfConst (Compare CmpEq)) $
+  Ctx.extend (Variable "/=")    (typeSchemeOfConst (Compare CmpNE)) $
+
   Ctx.extend (Variable "raise") (typeSchemeOfConst Raise) $
   Ctx.extend (Variable "total") (typeSchemeOfConst Total) $
   Ctx.extend (Variable "catch") (typeSchemeOfConst Catch) $
+
+  Ctx.extend (Variable "run-state") (typeSchemeOfConst RunState) $
+
+  Ctx.extend (Variable "fix") (typeSchemeOfConst Fixpoint) $
+
   Ctx.empty
 
 runInfer :: InferM a -> Either TCError a

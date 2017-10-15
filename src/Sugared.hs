@@ -151,7 +151,7 @@ varGrammar =
   where
     parseVar :: Text -> Either Mismatch Variable
     parseVar t =
-      if t `elem` ["lambda","let","record","delay","block","=:","?"]
+      if t `elem` ["lambda","let","record","delay","block","=","?"]
       then Left (unexpected t)
       else Right (Variable t)
 
@@ -286,7 +286,7 @@ sugaredGrammar = fixG $ match
   $ With (\store ->
              position >>>
              swap >>>
-             list (el (sym "=:") >>>
+             list (el (sym "=") >>>
                    el labelGrammar >>>
                    el sugaredGrammar) >>>
              store)

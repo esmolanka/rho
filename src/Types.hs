@@ -19,7 +19,8 @@ import qualified Data.Set as S
 import Data.String
 import Data.Monoid
 
-import Language.Sexp (Position)
+import Language.Sexp.Located (Position)
+
 
 ----------------------------------------------------------------------
 -- Expressions
@@ -94,8 +95,6 @@ data Const
 
   | Total -- no effects
 
-  | Sequence
-
   | Store Label
   | Load Label
   | RunState
@@ -103,12 +102,15 @@ data Const
   | Fixpoint
   deriving (Show, Eq, Ord)
 
+data BindingKind = LetBinding | DoBinding
+  deriving (Eq, Ord)
+
 type Expr = Fix ExprF
 data ExprF e
   = Var    Position Variable Int
   | Lambda Position Variable e
   | App    Position e e
-  | Let    Position Variable e e
+  | Let    Position BindingKind Variable e e -- let α = e₁ in e₂
   | Const  Position Const
   deriving (Eq, Ord, Functor, Foldable, Traversable)
 
@@ -121,27 +123,33 @@ instance Show e => Show (ExprF e) where
       showString "{" . showsPrec 11 x . (if i > 0 then showString "/" . showsPrec 11 i else id) . showString "}"
     Lambda _ x e   ->
       showParen (n >= 11)
-        (showString "λ" . showsPrec 11 x . showString " → " . showsPrec 11 e)
+        (showString "λ" . showsPrec 11 x . showString " →\n  " . showsPrec 11 e)
     App    _ f a   ->
       showParen (n >= 11)
         (showsPrec 11 f . showString " " . showsPrec 11 a)
-    Let    _ x a b ->
+    Let    _ LetBinding x a b ->
       showParen (n >= 11)
         (showString "let " . showsPrec 11 x . showString " = " . showsPrec 11 a .
-         showString " in " . showsPrec 11 b)
+         showString "\nin " . showsPrec 11 b)
+    Let    _ DoBinding x a b ->
+      showParen (n >= 11)
+        (showString "do " . showsPrec 11 x . showString " <- " . showsPrec 11 a .
+         showString ";\n" . showsPrec 11 b)
     Const  _ c     ->
       (showsPrec 11 c)
 
 instance {-# OVERLAPS #-} Show (Fix ExprF) where
   showsPrec n (Fix f) = showsPrec n f
 
+
 getPosition :: Expr -> Position
 getPosition (Fix x) = case x of
   Var pos _ _ -> pos
   App pos _ _ -> pos
   Lambda pos _ _ -> pos
-  Let pos _ _ _ -> pos
+  Let pos _ _ _ _ -> pos
   Const pos _ -> pos
+
 
 free :: Variable -> Int -> Expr -> Bool
 free x n0 expr = getAny $ runReader (cata alg expr) n0
@@ -153,7 +161,7 @@ free x n0 expr = getAny $ runReader (cata alg expr) n0
         return $ Any (x == x' && n == n')
       Lambda _ x' b ->
         if x == x' then local succ b else b
-      Let _ x' e b -> do
+      Let _ _ x' e b -> do
         e' <- e
         b' <- if x == x' then local succ b else b
         return $ e' <> b'
@@ -172,11 +180,12 @@ shift d x e = runReader (cata alg e) 0
       Lambda pos x' b -> do
         b' <- if x == x' then local succ b else b
         return $ Fix $ Lambda pos x' b'
-      Let pos x' e b -> do
+      Let pos k x' e b -> do
         e' <- e
         b' <- if x == x' then local succ b else b
-        return $ Fix $ Let pos x' e' b'
+        return $ Fix $ Let pos k x' e' b'
       other -> Fix <$> sequence other
+
 
 subst :: Variable -> Int -> Expr -> Expr -> Expr
 subst x n0 sub0 expr = runReader (cata alg expr) (n0, sub0)
@@ -200,13 +209,13 @@ subst x n0 sub0 expr = runReader (cata alg expr) (n0, sub0)
           then succIndex b
           else b
         return (Fix (Lambda pos x' b'))
-      Let pos x' e b -> do
+      Let pos k x' e b -> do
         e' <- e
         b' <- shifted 1 x' $
           if x == x'
           then succIndex b
           else b
-        return (Fix (Let pos x' e' b'))
+        return (Fix (Let pos k x' e' b'))
       other -> Fix <$> sequence other
 
 
@@ -239,17 +248,17 @@ type Type = Fix TypeF
 data TypeF e
   = TVar TyVar             -- κ
   | T BaseType             -- STAR
-  | TArrow e e e           -- STAR (STAR, ROW, STAR)
-  | TList e                -- STAR (STAR)
-  | TRecord e              -- STAR (ROW)
-  | TVariant e             -- STAR (ROW)
+  | TArrow e e e           -- STAR -> ROW -> STAR -> STAR
+  | TList e                -- STAR -> STAR
+  | TRecord e              -- ROW -> STAR
+  | TVariant e             -- ROW -> STAR
 
   | TPresent               -- PRESENCE
   | TAbsent                -- PRESENCE
 
-  | TRowEmpty              -- ROW ()
-  | TRowExtend Label e e e -- ROW (PRESENCE, STAR, ROW)
-  deriving (Show, Eq, Ord, Functor, Foldable)
+  | TRowEmpty              -- ROW
+  | TRowExtend Label e e e -- PRESENCE -> STAR -> ROW -> ROW
+  deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 instance Types Type where
   freeTyVars =
@@ -291,6 +300,7 @@ instance Types TyScheme where
     let dummy = M.fromList $ map (\tv -> (tv, ())) binders
         subst = TySubst (s `M.difference` dummy)
     in TyScheme binders (applySubst subst body)
+
 
 data TySubst = TySubst (M.Map TyVar Type)
   deriving (Show, Eq, Ord)
@@ -354,6 +364,7 @@ infixr 3 ~>
 (~>) :: (Type, Type) -> Type -> Type
 (a, e) ~> b = Fix (TArrow a e b)
 
+
 ----------------------------------------------------------------------
 
 typeSchemeOfConst :: Const -> TyScheme
@@ -392,7 +403,6 @@ typeSchemeOfConst = \case
       (b, e3) ~>
       (Fix (TList a), e4) ~>
       b
-
 
   RecordEmpty ->
     mono $ Fix $ TRecord $ Fix $ TRowEmpty
@@ -581,17 +591,6 @@ typeSchemeOfConst = \case
     effect $ \e ->
     mono $
       ((Fix (T TUnit), Fix TRowEmpty) ~> a, e) ~> a
-
-  Sequence ->
-    forall Star $ \a ->
-    forall Star $ \b ->
-    effect $ \e ->
-    effect $ \e1 ->
-    effect $ \e2 ->
-    mono $
-      ((Fix (T TUnit), e) ~> a, e1) ~>
-      ((Fix (T TUnit), e) ~> b, e2) ~>
-      ((Fix (T TUnit), e) ~> b)
 
   Store lbl ->
     forall Star $ \a ->

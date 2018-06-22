@@ -1,8 +1,7 @@
 (let
     ( [some-record
        (delay
-         (record
-          (:field1 [(/ 100 (read)) 42])))]
+         {:field1 [(/ 100 (read)) 42]})]
 
       [x 42]
 

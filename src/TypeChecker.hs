@@ -24,6 +24,7 @@ data TCError
   | InfiniteType Type
   | RecursiveRowType Type
   | KindMismatch Kind Kind
+  | IllKindedType (TypeF Kind)
   | VariableNotFound Expr
   deriving (Show)
 
@@ -68,7 +69,11 @@ unifyIs tv typ
   | otherwise = return (singletonSubst tv typ)
 
 unify :: (MonadState FreshSupply m, MonadError TCError m) => Type -> Type -> m TySubst
-unify (Fix l) (Fix r) =
+unify (Fix l) (Fix r) = do
+  lk <- inferKind (Fix l)
+  rk <- inferKind (Fix r)
+  unless (lk == rk) $
+    throwError $ KindMismatch lk rk
   case (l, r) of
     (TVar x, TVar y) -> unifyVars x y
     (TVar x, typ)    -> x `unifyIs` Fix typ
@@ -183,12 +188,22 @@ inferType = cata alg
           , applySubst (se `composeSubst` sr) eff2
           )
 
-      Let _pos x e b -> do
+      Let _pos LetBinding x e b -> do
         (se, te, eff1) <- e
         sf <- unify eff1 (Fix TRowEmpty)
         (sb, tb, eff2) <- Ctx.withSubst (sf `composeSubst` se) $ do
           scheme <- generalize te
           Ctx.with x scheme $ b
+        return
+          ( sb `composeSubst` sf `composeSubst` se
+          , tb
+          , eff2
+          )
+
+      Let _pos DoBinding x e b -> do
+        (se, te, eff1) <- e
+        (sb, tb, eff2) <- Ctx.withSubst se $ Ctx.with x (TyScheme [] te) $ b
+        sf <- unify eff1 eff2
         return
           ( sb `composeSubst` sf `composeSubst` se
           , tb
@@ -203,11 +218,30 @@ inferType = cata alg
 
 inferExprType
   :: forall m. (MonadState FreshSupply m, MonadReader Context m, MonadError TCError m) =>
-     Expr
-  -> m (Type, Type)
+     Expr -> m (Type, Type)
 inferExprType expr = do
   (se, te, fe) <- inferType expr
   return (applySubst se te, applySubst se fe)
+
+
+inferKind :: forall m. (MonadError TCError m) => Type -> m Kind
+inferKind = cata (alg <=< sequence)
+  where
+    alg :: TypeF Kind -> m Kind
+    alg = \case
+      TVar tv              -> return (tvKind tv)
+      T _                  -> return Star
+      TArrow Star Row Star -> return Star
+      TList Star           -> return Star
+      TRecord Row          -> return Star
+      TVariant Row         -> return Star
+      TPresent             -> return Presence
+      TAbsent              -> return Presence
+      TRowEmpty            -> return Row
+      TRowExtend _
+         Presence Star Row -> return Row
+      other                -> throwError $ IllKindedType other
+
 
 type InferM = ExceptT TCError (StateT FreshSupply (Reader Context))
 

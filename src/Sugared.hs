@@ -4,30 +4,30 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators     #-}
 
+{-# OPTIONS_GHC -O0 #-}
+
 module Sugared where
 
 import Prelude hiding (id)
+
+import Control.Category (id, (>>>))
+import Control.Monad.Free
+import Data.Coerce
+import Data.Functor.Foldable (Fix(..), futu)
+import Data.Semigroup
+import Data.Text (Text, unpack, isPrefixOf)
+import GHC.Generics
+
+import Language.Sexp.Located (Position)
+import Language.SexpGrammar
+import Language.SexpGrammar.Generic
+
 import qualified Types as Raw
 import Types hiding (ExprF(..), Const(..))
 
-import Control.Monad.Free
-import Data.Functor.Foldable (Fix(..), futu)
-
-import Language.Sexp (Position)
-import Language.SexpGrammar
-import Language.SexpGrammar.Generic
-import Control.Category (id, (>>>))
--- import Control.Monad.State.Strict
-
-import Data.Text (Text)
--- import Data.Semigroup
-import Data.Coerce
-
-import GHC.Generics
-
 data Literal
   = LitInt  Integer
-  | LitStr  String
+  | LitStr  Text
   | LitBool Bool
   | LitUnit
     deriving (Generic)
@@ -35,6 +35,11 @@ data Literal
 data LetBinding e
   = OrdinaryBinding Variable e
   | RecursiveBinding Variable Variable [Variable] e
+    deriving (Generic)
+
+data SeqBinding e
+  = IgnoringBinding e
+  | OrdinarySeqBinding Variable e
     deriving (Generic)
 
 type Sugared = Fix SugaredF
@@ -52,7 +57,7 @@ data SugaredF e
   | RecRst  Position Label e
   | Delay   Position e
   | Force   Position e
-  | Block   Position [e]
+  | DoBlock Position [SeqBinding e]
   | Store   Position Label e
   | Load    Position Label
     deriving (Generic)
@@ -69,7 +74,6 @@ desugar = futu coalg
     mkApp pos f args =
       foldl (\acc arg -> Free $ Raw.App pos acc arg) f args
 
-
     coalg :: Sugared -> Raw.ExprF (Free Raw.ExprF Sugared)
     coalg = \case
       Fix (Var pos var)       -> Raw.Var pos var 0
@@ -80,8 +84,8 @@ desugar = futu coalg
 
       Fix (Let pos b bs e) ->
         let (name, expr) = desugarBinding b
-        in Raw.Let pos name expr
-             (foldr (\(name, expr) rest -> Free $ Raw.Let pos name expr rest) (Pure e) (map desugarBinding bs))
+        in Raw.Let pos Raw.LetBinding name expr
+             (foldr (\(name, expr) rest -> Free $ Raw.Let pos Raw.LetBinding name expr rest) (Pure e) (map desugarBinding bs))
         where
           desugarBinding :: LetBinding Sugared -> (Variable, Free Raw.ExprF Sugared)
           desugarBinding = \case
@@ -98,7 +102,7 @@ desugar = futu coalg
         case lit of
           LitInt  x -> Raw.Const pos (Raw.LitInt  x)
           LitBool x -> Raw.Const pos (Raw.LitBool x)
-          LitStr  x -> Raw.Const pos (Raw.LitStr  x)
+          LitStr  x -> Raw.Const pos (Raw.LitStr (unpack x))
           LitUnit   -> Raw.Const pos Raw.LitUnit
 
       Fix (If pos cond tr fls) ->
@@ -149,16 +153,16 @@ desugar = futu coalg
           (Pure expr)
           (Free (Raw.Const pos Raw.LitUnit))
 
-      Fix (Block pos stmts) ->
+      Fix (DoBlock pos stmts) ->
         case stmts of
           [] -> error "Woot"
-          (x : xs) ->
-            let block = foldl
-                  (\blk stmt ->
-                      Free (Raw.App pos
-                             (Free (Raw.App pos (Free (Raw.Const pos Raw.Sequence)) blk))
-                             (Free (Raw.Lambda pos (Variable "_") (Pure stmt)))))
-                  (Free (Raw.Lambda pos (Variable "_") (Pure x))) xs
+          stmts@(_:_) ->
+            let bind bnd rest =
+                  let (var, expr) = case bnd of
+                        IgnoringBinding expr -> (Variable "_", expr)
+                        OrdinarySeqBinding var expr -> (var, expr)
+                  in Free $ Raw.Let pos Raw.DoBinding var (Pure expr) rest
+                block = foldr bind (case last stmts of {IgnoringBinding x -> Pure x; OrdinarySeqBinding _ x -> Pure x}) (init stmts)
             in case block of
                  Free x -> x
                  Pure{} -> error "Woot"
@@ -175,33 +179,34 @@ desugar = futu coalg
 ----------------------------------------------------------------------
 -- Grammars
 
-varGrammar :: SexpG Variable
+varGrammar :: Grammar Position (Sexp :- t) (Variable :- t)
 varGrammar =
   symbol >>>
-  partialOsi "Variable" coerce parseVar
+  partialOsi parseVar coerce
   where
     parseVar :: Text -> Either Mismatch Variable
     parseVar t =
-      if t `elem` ["lambda","let","if","record","delay","block","=","?"]
+      if t `elem` ["lambda","let","if","record","delay","do","=","?","tt","ff"] ||
+         ":" `isPrefixOf` t
       then Left (unexpected t)
       else Right (Variable t)
 
 
-labelGrammar :: SexpG Label
+labelGrammar :: Grammar Position (Sexp :- t) (Label :- t)
 labelGrammar = keyword >>> iso coerce coerce
 
 
-bindingGrammar :: SexpG (LetBinding Sugared)
+bindingGrammar :: Grammar Position (Sexp :- t) (LetBinding Sugared :- t)
 bindingGrammar = match
   $ With (\ordinary ->
-            vect (
+            bracketList (
              el varGrammar >>>
              el sugaredGrammar) >>>
             ordinary
          )
   $ With (\recursive ->
-            vect (
-             el (kw (Kw "rec")) >>>
+            bracketList (
+             el (sym ":rec") >>>
              el varGrammar >>>
              el (list (el varGrammar >>> rest varGrammar)) >>>
              el sugaredGrammar) >>>
@@ -209,34 +214,56 @@ bindingGrammar = match
   $ End
 
 
-litGrammar :: SexpG Literal
+seqStmtGrammar :: Grammar Position (Sexp :- t) (SeqBinding Sugared :- t)
+seqStmtGrammar = match
+  $ With (\ign -> sugaredGrammar >>> ign)
+  $ With (\bnd -> braceList (
+             el varGrammar >>>
+             el (sym "<-") >>>
+             el sugaredGrammar
+             ) >>> bnd)
+  $ End
+
+boolGrammar :: Grammar Position (Sexp :- t) (Bool :- t)
+boolGrammar = symbol >>> partialOsi
+  (\case
+      "tt" -> Right True
+      "ff" -> Right False
+      other -> Left $ expected "bool" <> unexpected ("symbol " <> other))
+  (\case
+      True -> "tt"
+      False -> "ff")
+
+litGrammar :: Grammar Position (Sexp :- t) (Literal :- t)
 litGrammar = match
   $ With (\liti -> integer >>> liti)
-  $ With (\lits -> string' >>> lits)
-  $ With (\litb -> bool    >>> litb)
+  $ With (\lits -> string  >>> lits)
+  $ With (\litb -> boolGrammar >>> litb)
   $ With (\litu -> list id >>> litu)
   $ End
 
 
-sugaredGrammar :: SexpG Sugared
+sugaredGrammar :: Grammar Position (Sexp :- t) (Sugared :- t)
 sugaredGrammar = fixG $ match
-  $ With (\var  ->
+  $ With (\var ->
+             annotated "variable" $
              position >>>
              swap >>>
              varGrammar >>> var)
 
-  $ With (\lam  ->
-            position >>>
-            swap >>>
-            list (
-             el (sym "lambda") >>>
-             el (list (
-                    el varGrammar >>>
-                    rest varGrammar)
-                ) >>>
-             el sugaredGrammar) >>> lam)
+  $ With (\lam ->
+             annotated "lambda" $
+             position >>>
+             swap >>>
+             list (
+               el (sym "lambda") >>>
+               el (list (
+                     el varGrammar >>>
+                     rest varGrammar)) >>>
+               el sugaredGrammar) >>>
+             lam)
 
-  $ With (\app  ->
+  $ With (\app ->
             position >>>
             swap >>>
             list (
@@ -245,46 +272,56 @@ sugaredGrammar = fixG $ match
              rest sugaredGrammar) >>> app)
 
   $ With (\let_ ->
-            position >>>
-            swap >>>
-            list (
-             el (sym "let") >>>
-             el (list (
-                    el bindingGrammar >>>
-                    rest bindingGrammar)) >>>
-             el sugaredGrammar
-             ) >>> let_)
+             annotated "record literal" $
+             position >>>
+             swap >>>
+             list (
+               el (sym "let") >>>
+               el (list (
+                      el bindingGrammar >>>
+                      rest bindingGrammar)) >>>
+               el sugaredGrammar) >>>
+             let_)
 
   $ With (\mklit ->
+             annotated "literal" $
              position >>>
              swap >>>
              litGrammar >>>
              mklit)
 
   $ With (\ifp ->
-            position >>>
-            swap >>>
-            list (
-             el (sym "if") >>>
-             el sugaredGrammar >>>
-             el sugaredGrammar >>>
-             el sugaredGrammar) >>>
-            ifp)
-
-  $ With (\mklst ->
+             annotated "if expression" $
              position >>>
              swap >>>
-             vect (rest sugaredGrammar) >>>
+             list (
+              el (sym "if") >>>
+              el sugaredGrammar >>>
+              el sugaredGrammar >>>
+              el sugaredGrammar) >>>
+             ifp)
+
+  $ With (\mklst ->
+             annotated "list literal" $
+             position >>>
+             swap >>>
+             bracketList (rest sugaredGrammar) >>>
              mklst)
 
   $ With (\mkrec ->
+             annotated "record literal" $
              position >>>
              swap >>>
-             list (el (sym "record") >>>
-                   rest (list (el labelGrammar >>> el sugaredGrammar >>> pair))) >>>
+             braceList (
+               props (
+                 restKeys (
+                   sugaredGrammar >>>
+                   onTail (iso coerce coerce) >>>
+                   pair))) >>>
              mkrec)
 
   $ With (\recprj ->
+             annotated "record selection" $
              position >>>
              swap >>>
              list (
@@ -293,22 +330,24 @@ sugaredGrammar = fixG $ match
              recprj)
 
   $ With (\recext ->
+             annotated "record extension" $
              position >>>
              swap >>>
              list (
                el labelGrammar >>>
                el sugaredGrammar >>>
-               el (kw (Kw "extend")) >>>
+               el (sym ":extend") >>>
                el sugaredGrammar) >>>
              recext)
 
   $ With (\recrest ->
+             annotated "record restriction" $
              position >>>
              swap >>>
              list (
                el labelGrammar >>>
                el sugaredGrammar >>>
-               el (kw (Kw "restrict"))) >>>
+               el (sym ":restrict")) >>>
              recrest)
 
   $ With (\delay ->
@@ -324,14 +363,15 @@ sugaredGrammar = fixG $ match
              list (el sugaredGrammar) >>>
              force)
 
-  $ With (\block ->
+  $ With (\doblock ->
+             annotated "do-block" $
              position >>>
              swap >>>
-             list (el (sym "block") >>>
-                   el sugaredGrammar >>>
-                   rest sugaredGrammar >>>
-                   swap >>> pair >>> cons) >>>
-             block)
+             list (el (sym "do") >>>
+                   el seqStmtGrammar >>>
+                   rest seqStmtGrammar >>>
+                   onTail cons) >>>
+             doblock)
 
   $ With (\store ->
              position >>>
@@ -350,20 +390,9 @@ sugaredGrammar = fixG $ match
 
   $ End
 
-
-cons :: Grammar g (([a], a) :- t) ([a] :- t)
-cons = partialIso "list" to from
-  where
-    from :: [a] -> Either Mismatch ([a], a)
-    from [] = Left (unexpected "empty list")
-    from (x:xs) = Right (xs, x)
-
-    to :: ([a], a) -> [a]
-    to = uncurry $ flip (:)
-
 ----------------------------------------------------------------------
 -- Utils
 
-fixG :: Grammar SexpGrammar (Sexp :- t) (f (Fix f) :- t)
-     -> Grammar SexpGrammar (Sexp :- t) (Fix f :- t)
+fixG :: Grammar Position (Sexp :- t) (f (Fix f) :- t)
+     -> Grammar Position (Sexp :- t) (Fix f :- t)
 fixG g = g >>> iso coerce coerce

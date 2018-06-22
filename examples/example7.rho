@@ -3,7 +3,7 @@
 
 (lambda (n)
   (run-state
-   (block
+   (do
      (= :n n)
      (= :acc 1)
      (fix

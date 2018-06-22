@@ -4,7 +4,7 @@ import Data.String
 import Data.Functor.Foldable (Fix(..))
 import Types
 
-import Language.Sexp (dummyPos)
+import Language.Sexp.Located (dummyPos)
 
 lambda :: String -> Expr -> Expr
 lambda x body = Fix $ Lambda dummyPos (fromString x) body
@@ -19,7 +19,7 @@ app :: Expr -> [Expr] -> Expr
 app f a = foldl ((Fix .) . App dummyPos) f a
 
 let_ :: String -> Expr -> Expr -> Expr
-let_ x a b = Fix $ Let dummyPos (fromString x) a b
+let_ x a b = Fix $ Let dummyPos LetBinding (fromString x) a b
 
 var :: String -> Expr
 var x = Fix $ Var dummyPos (fromString x) 0
@@ -71,6 +71,3 @@ catch = Fix $ Const dummyPos $ Catch
 
 total :: Fix ExprF
 total = Fix $ Const dummyPos $ Total
-
-sequence :: Fix ExprF
-sequence = Fix $ Const dummyPos $ Sequence

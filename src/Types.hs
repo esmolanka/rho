@@ -81,7 +81,6 @@ data Const
   | And
   | Or
   | Not
-
   | If
 
   | Print
@@ -90,9 +89,7 @@ data Const
 
   | Raise
   | Catch
-
   | Total -- no effects
-
   | Fixpoint
   deriving (Show, Eq, Ord)
 

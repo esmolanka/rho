@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Pretty where
@@ -7,10 +7,11 @@ import Data.Functor.Foldable (Fix(..), para)
 import Data.String
 import Data.Text.Lazy (unpack)
 
-import Types
-
 import Text.PrettyPrint.Leijen.Text hiding ((<$>))
 import qualified Text.PrettyPrint.Leijen.Text as PP
+
+import Types
+import Errors
 
 ppTyVar :: TyVar -> Doc
 ppTyVar (TyVar n k) = ppKind k <> int n
@@ -52,6 +53,30 @@ ppType = (group .) . para $ \case
          Fix (TRowEmpty) -> field
          Fix (TVar{})    -> field <+> "|" <+> t
          Fix _           -> field <> "," PP.<$> t
+
+ppError :: TCError -> Doc
+ppError (TCError pos reason) =
+  vsep [ pretty (show pos) <> ": type check error:"
+       , indent 2 $ ppReason reason
+       ]
+
+ppReason :: Reason -> Doc
+ppReason = \case
+  CannotUnify t1 t2 -> vsep
+    [ "Cannot unify types."
+    , indent 2 $ "Actual:  "   <+> nest 2 (ppType t1)
+    , indent 2 $ "Expected:" <+> nest 2 (ppType t2)
+    ]
+  CannotUnifyLabel lbl t1 t2 -> vsep
+    [ "Cannot unify label" <+> pretty (show lbl) <+> "in types."
+    , indent 2 $ "Actual:  " <+> nest 2 (ppType t1)
+    , indent 2 $ "Expected:" <+> nest 2 (ppType t2)
+    ]
+  InfiniteType t1 -> "Infinite type:" PP.<$> indent 2 (ppType t1)
+  RecursiveRowType t1 -> "Recursive row type:" PP.<$> indent 2 (ppType t1)
+  KindMismatch k1 k2 -> "Kind mismatch:" <+> pretty (show k1) <+> "!~" <+> pretty (show k2)
+  IllKindedType _ -> "Ill-kinded type"
+  VariableNotFound expr -> "Variable not found:" <+> pretty (show expr)
 
 pp :: Doc -> String
 pp = unpack . displayT . renderPretty 0.9 100

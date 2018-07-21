@@ -18,20 +18,7 @@ import Types
 import Context (Context)
 import qualified Context as Ctx
 import Pretty
-
-data TCError
-  = TCError Position Reason
-  deriving (Show)
-
-data Reason
-  = CannotUnify Type Type
-  | CannotUnifyLabel Label Type Type
-  | InfiniteType Type
-  | RecursiveRowType Type
-  | KindMismatch Kind Kind
-  | IllKindedType (TypeF Kind)
-  | VariableNotFound Expr
-  deriving (Show)
+import Errors
 
 newtype FreshSupply = FreshSupply { getFreshName :: Int }
 
@@ -261,5 +248,5 @@ showType :: Expr -> IO ()
 showType e = do
   putStrLn ("checking expr:\n" ++ show e ++ "\n\n")
   case runInfer (inferExprType e) of
-    Left err -> putStrLn ("typecheck error:\n" ++ show err)
+    Left err -> putStrLn (pp (ppError err))
     Right (ty,eff) -> putStrLn $ pp (ppType ty) ++ "\n" ++ pp (ppType eff)

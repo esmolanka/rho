@@ -16,12 +16,14 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   ghc-options:         -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
-  exposed-modules:     Context
-                       Eval
-                       Pretty
-                       Sugared
-                       TypeChecker
-                       Types
+  exposed-modules:
+    Context
+    Eval
+    Errors
+    Pretty
+    Sugared
+    TypeChecker
+    Types
 
   build-depends:
     base >= 4.7 && < 5, wl-pprint-text, containers, mtl, text,

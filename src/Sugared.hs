@@ -12,6 +12,7 @@ import Prelude hiding (id)
 
 import Control.Category (id, (>>>))
 import Control.Monad.Free
+
 import Data.Coerce
 import Data.Functor.Foldable (Fix(..), futu)
 import Data.Semigroup
@@ -24,6 +25,7 @@ import Language.SexpGrammar.Generic
 
 import qualified Types as Raw
 import Types hiding (ExprF(..), Const(..))
+import Eval
 
 data Literal
   = LitInt  Integer
@@ -58,13 +60,11 @@ data SugaredF e
   | Delay   Position e
   | Force   Position e
   | DoBlock Position [SeqBinding e]
-  | Store   Position Label e
-  | Load    Position Label
     deriving (Generic)
 
 
 desugar :: Sugared -> Raw.Expr
-desugar = futu coalg
+desugar = resolvePrimitives . futu coalg
   where
     dummyVar = Variable "$"
 
@@ -167,14 +167,6 @@ desugar = futu coalg
                  Free x -> x
                  Pure{} -> error "Woot"
 
-      Fix (Store pos label payload) ->
-        Raw.App pos (Free (Raw.Const pos (Raw.Store label))) (Pure payload)
-
-      Fix (Load pos label) ->
-        Raw.App pos
-          (Free (Raw.Const pos (Raw.Load label)))
-          (Free (Raw.Const pos Raw.LitUnit))
-
 
 ----------------------------------------------------------------------
 -- Grammars
@@ -232,6 +224,7 @@ boolGrammar = symbol >>> partialOsi
   (\case
       True -> "tt"
       False -> "ff")
+
 
 litGrammar :: Grammar Position (Sexp :- t) (Literal :- t)
 litGrammar = match
@@ -371,21 +364,6 @@ sugaredGrammar = fixG $ match
                    rest seqStmtGrammar >>>
                    onTail cons) >>>
              doblock)
-
-  $ With (\store ->
-             position >>>
-             swap >>>
-             list (el (sym "=") >>>
-                   el labelGrammar >>>
-                   el sugaredGrammar) >>>
-             store)
-
-  $ With (\load ->
-             position >>>
-             swap >>>
-             list (el (sym "?") >>>
-                   el labelGrammar) >>>
-             load)
 
   $ End
 

@@ -97,10 +97,6 @@ data Const
 
   | Total -- no effects
 
-  | Store Label
-  | Load Label
-  | RunState
-
   | Fixpoint
   deriving (Show, Eq, Ord)
 
@@ -612,35 +608,6 @@ typeSchemeOfConst = \case
     effect $ \e ->
     mono $
       ((Fix (T TUnit), Fix TRowEmpty) ~> a, e) ~> a
-
-  Store lbl ->
-    forall Star $ \a ->
-    forall Row $ \r ->
-    effect $ \e ->
-    mono $
-      let r' = Fix $ TRowExtend lbl (Fix TPresent) a $ r
-      in (a, Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r') e) ~> Fix (T TUnit)
-
-  Load lbl ->
-    forall Star $ \a ->
-    forall Row $ \r ->
-    effect $ \e ->
-    mono $
-      let r' = Fix $ TRowExtend lbl (Fix TPresent) a $ r
-      in (Fix (T TUnit), Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r') e) ~> a
-
-  RunState ->
-    forall Star $ \a ->
-    forall Star $ \b ->
-    forall Row $ \r ->
-    forall Presence $ \p ->
-    effect $ \e ->
-    mono $
-      ( (Fix (T TUnit)
-        , Fix $ TRowExtend stateEff (Fix TPresent) (Fix $ TRecord r) e) ~> a
-      , Fix $ TRowExtend stateEff p b e
-      ) ~>
-      a
 
   Fixpoint ->
     forall Star $ \a ->

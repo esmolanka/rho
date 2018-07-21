@@ -251,41 +251,9 @@ inferKind = cata (alg <=< sequence)
 
 type InferM = ExceptT TCError (StateT FreshSupply (Reader Context))
 
-primitives :: Context
-primitives =
-  Ctx.extend (Variable "cons")  (typeSchemeOfConst ListCons) $
-  Ctx.extend (Variable "nil")   (typeSchemeOfConst ListEmpty) $
-  Ctx.extend (Variable "fold")  (typeSchemeOfConst ListFold) $
-
-  Ctx.extend (Variable "read")  (typeSchemeOfConst Read) $
-  Ctx.extend (Variable "print") (typeSchemeOfConst Print) $
-  Ctx.extend (Variable "pure")  (typeSchemeOfConst Pure) $
-
-  Ctx.extend (Variable "+")     (typeSchemeOfConst Add) $
-  Ctx.extend (Variable "-")     (typeSchemeOfConst Subtract) $
-  Ctx.extend (Variable "*")     (typeSchemeOfConst Multiply) $
-  Ctx.extend (Variable "/")     (typeSchemeOfConst Divide) $
-
-  Ctx.extend (Variable "<")     (typeSchemeOfConst (Compare CmpLT)) $
-  Ctx.extend (Variable "<=")    (typeSchemeOfConst (Compare CmpLE)) $
-  Ctx.extend (Variable ">")     (typeSchemeOfConst (Compare CmpGT)) $
-  Ctx.extend (Variable ">=")    (typeSchemeOfConst (Compare CmpGE)) $
-  Ctx.extend (Variable "==")    (typeSchemeOfConst (Compare CmpEq)) $
-  Ctx.extend (Variable "/=")    (typeSchemeOfConst (Compare CmpNE)) $
-
-  Ctx.extend (Variable "raise") (typeSchemeOfConst Raise) $
-  Ctx.extend (Variable "total") (typeSchemeOfConst Total) $
-  Ctx.extend (Variable "catch") (typeSchemeOfConst Catch) $
-
-  Ctx.extend (Variable "run-state") (typeSchemeOfConst RunState) $
-
-  Ctx.extend (Variable "fix") (typeSchemeOfConst Fixpoint) $
-
-  Ctx.empty
-
 runInfer :: InferM a -> Either TCError a
 runInfer =
-  flip runReader primitives .
+  flip runReader Ctx.empty .
   flip evalStateT (FreshSupply 0) .
   runExceptT
 

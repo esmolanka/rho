@@ -83,14 +83,14 @@ desugar = futu coalg
       Fix (App pos f a as)    -> let Free x = mkApp pos (Pure f) (map Pure (a:as)) in x
 
       Fix (Let pos b bs e) ->
-        let (name, expr) = desugarBinding b
-        in Raw.Let pos Raw.LetBinding name expr
-             (foldr (\(name, expr) rest -> Free $ Raw.Let pos Raw.LetBinding name expr rest) (Pure e) (map desugarBinding bs))
+        let (name, kind, expr) = desugarBinding b
+        in Raw.Let pos kind name expr
+             (foldr (\(name, kind, expr) rest -> Free $ Raw.Let pos kind name expr rest) (Pure e) (map desugarBinding bs))
         where
-          desugarBinding :: LetBinding Sugared -> (Variable, Free Raw.ExprF Sugared)
+          desugarBinding :: LetBinding Sugared -> (Variable, Raw.BindingKind, Free Raw.ExprF Sugared)
           desugarBinding = \case
-            OrdinaryBinding  n expr -> (n, Pure expr)
-            RecursiveBinding n var vars expr -> (n, body)
+            OrdinaryBinding n expr -> (n, Raw.LetBinding, Pure expr)
+            RecursiveBinding n var vars expr -> (n, Raw.LetBinding, body)
               where
                 avs = map (const dummyVar) (var:vars)
                 refs = reverse $ zipWith (\var n -> Free $ Raw.Var pos var n) avs [0..]
@@ -202,8 +202,7 @@ bindingGrammar = match
             bracketList (
              el varGrammar >>>
              el sugaredGrammar) >>>
-            ordinary
-         )
+            ordinary)
   $ With (\recursive ->
             bracketList (
              el (sym ":rec") >>>

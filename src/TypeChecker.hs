@@ -1,8 +1,9 @@
-{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE ImplicitParams      #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE LambdaCase          #-}
 
 module TypeChecker where
 
@@ -10,7 +11,7 @@ import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad.Reader
 
-import Data.Functor.Foldable (cata, Fix (..))
+import Data.Functor.Foldable (cata, para, Fix (..))
 import qualified Data.Set as S
 
 import Types
@@ -19,6 +20,10 @@ import qualified Context as Ctx
 import Pretty
 
 data TCError
+  = TCError Position Reason
+  deriving (Show)
+
+data Reason
   = CannotUnify Type Type
   | CannotUnifyLabel Label Type Type
   | InfiniteType Type
@@ -52,28 +57,28 @@ generalize ty = do
 ----------------------------------------------------------------------
 -- Unification
 
-unifyBaseTypes :: (MonadState FreshSupply m, MonadError TCError m) => BaseType -> BaseType -> m ()
+unifyBaseTypes :: (?pos :: Position, MonadState FreshSupply m, MonadError TCError m) => BaseType -> BaseType -> m ()
 unifyBaseTypes a b =
   unless (a == b) $
-    throwError (CannotUnify (Fix (T a)) (Fix (T b)))
+    throwError (TCError ?pos (CannotUnify (Fix (T a)) (Fix (T b))))
 
-unifyVars :: (MonadState FreshSupply m, MonadError TCError m) => TyVar -> TyVar -> m TySubst
+unifyVars :: (?pos :: Position, MonadState FreshSupply m, MonadError TCError m) => TyVar -> TyVar -> m TySubst
 unifyVars a b = do
   unless (tvKind a == tvKind b) $
-    throwError (KindMismatch (tvKind a) (tvKind b))
+    throwError (TCError ?pos (KindMismatch (tvKind a) (tvKind b)))
   return (singletonSubst a (Fix (TVar b)))
 
-unifyIs :: (MonadState FreshSupply m, MonadError TCError m) => TyVar -> Type -> m TySubst
+unifyIs :: (?pos :: Position, MonadState FreshSupply m, MonadError TCError m) => TyVar -> Type -> m TySubst
 unifyIs tv typ
-  | tv `S.member` freeTyVars typ = throwError (InfiniteType typ)
+  | tv `S.member` freeTyVars typ = throwError (TCError ?pos (InfiniteType typ))
   | otherwise = return (singletonSubst tv typ)
 
-unify :: (MonadState FreshSupply m, MonadError TCError m) => Type -> Type -> m TySubst
+unify :: (?pos :: Position, MonadState FreshSupply m, MonadError TCError m) => Type -> Type -> m TySubst
 unify (Fix l) (Fix r) = do
   lk <- inferKind (Fix l)
   rk <- inferKind (Fix r)
   unless (lk == rk) $
-    throwError $ KindMismatch lk rk
+    throwError (TCError ?pos (KindMismatch lk rk))
   case (l, r) of
     (TVar x, TVar y) -> unifyVars x y
     (TVar x, typ)    -> x `unifyIs` Fix typ
@@ -98,7 +103,7 @@ unify (Fix l) (Fix r) = do
       (pty'', fty'', tail'', s1) <- rewriteRow lbl lbl' pty' fty' tail'
       case getRowTail tail of
         Just r | domSubst r s1 ->
-                   throwError (RecursiveRowType (Fix (TRowExtend lbl' pty'' fty'' tail'')))
+                   throwError (TCError ?pos (RecursiveRowType (Fix (TRowExtend lbl' pty'' fty'' tail''))))
         _ -> do
           s2 <- unify (applySubst s1 pty) (applySubst s1 pty'')
           let s3 = composeSubst s2 s1
@@ -117,10 +122,11 @@ unify (Fix l) (Fix r) = do
         (Fix (TRowExtend lbl p f r))
         (Fix (TRowExtend lbl (Fix TAbsent) f (Fix TRowEmpty)))
 
-    _ -> throwError $ CannotUnify (Fix l) (Fix r)
+    _ -> throwError (TCError ?pos (CannotUnify (Fix l) (Fix r)))
+
 
 rewriteRow
-  :: (MonadState FreshSupply m, MonadError TCError m) =>
+  :: (?pos :: Position, MonadState FreshSupply m, MonadError TCError m) =>
      Label -> Label -> Type -> Type -> Type -> m (Type, Type, Type, TySubst)
 rewriteRow newLbl lbl pty fty tail =
   if newLbl == lbl
@@ -149,14 +155,14 @@ inferType
   :: forall m. (MonadState FreshSupply m, MonadReader Context m, MonadError TCError m) =>
      Expr
   -> m (TySubst, Type, Type)
-inferType = cata alg
+inferType = para alg
   where
-    alg :: ExprF (m (TySubst, Type, Type)) -> m (TySubst, Type, Type)
+    alg :: ExprF (Expr, m (TySubst, Type, Type)) -> m (TySubst, Type, Type)
     alg = \case
       Var pos x n -> do
         mts <- asks (Ctx.lookup x n)
         case mts of
-          Nothing -> throwError (VariableNotFound (Fix (Var pos x n)))
+          Nothing -> throwError (TCError pos (VariableNotFound (Fix (Var pos x n))))
           Just sigma -> do
             typ <- instantiate sigma
             eff <- newTyVar Row
@@ -166,7 +172,7 @@ inferType = cata alg
               , eff
               )
 
-      Lambda _pos x b -> do
+      Lambda _pos x (_, b) -> do
         tv <- newTyVar Star
         (s1, t1, eff1) <- Ctx.with x (TyScheme [] tv) b
         eff <- newTyVar Row
@@ -176,7 +182,7 @@ inferType = cata alg
           , eff
           )
 
-      App _pos f a -> do
+      App pos (_, f) (_, a) -> let ?pos = pos in do
         (sf, tf, eff1) <- f
         (sa, ta, eff2) <- Ctx.withSubst sf a
         tr <- newTyVar Star
@@ -188,7 +194,7 @@ inferType = cata alg
           , applySubst (se `composeSubst` sr) eff2
           )
 
-      Let _pos LetBinding x e b -> do
+      Let pos LetBinding x (_, e) (_, b) -> let ?pos = pos in do
         (se, te, eff1) <- e
         sf <- unify eff1 (Fix TRowEmpty)
         (sb, tb, eff2) <- Ctx.withSubst (sf `composeSubst` se) $ do
@@ -200,7 +206,7 @@ inferType = cata alg
           , eff2
           )
 
-      Let _pos DoBinding x e b -> do
+      Let pos DoBinding x (_, e) (_, b) -> let ?pos = pos in do
         (se, te, eff1) <- e
         (sb, tb, eff2) <- Ctx.withSubst se $ Ctx.with x (TyScheme [] te) $ b
         sf <- unify eff1 eff2
@@ -224,7 +230,7 @@ inferExprType expr = do
   return (applySubst se te, applySubst se fe)
 
 
-inferKind :: forall m. (MonadError TCError m) => Type -> m Kind
+inferKind :: forall m. (?pos :: Position, MonadError TCError m) => Type -> m Kind
 inferKind = cata (alg <=< sequence)
   where
     alg :: TypeF Kind -> m Kind
@@ -240,7 +246,7 @@ inferKind = cata (alg <=< sequence)
       TRowEmpty            -> return Row
       TRowExtend _
          Presence Star Row -> return Row
-      other                -> throwError $ IllKindedType other
+      other                -> throwError (TCError ?pos (IllKindedType other))
 
 
 type InferM = ExceptT TCError (StateT FreshSupply (Reader Context))

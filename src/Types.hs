@@ -6,18 +6,20 @@
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
-module Types where
+module Types (module Types, Position) where
 
 import Control.Arrow (first, second)
 import Control.Monad.Reader
 
-import Data.Text (Text, pack, unpack)
 import Data.Foldable
 import Data.Functor.Foldable (Fix(..), cata)
+import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Monoid
+import Data.Set (Set)
 import qualified Data.Set as S
 import Data.String
-import Data.Monoid
+import Data.Text (Text, pack, unpack)
 
 import Language.Sexp.Located (Position)
 
@@ -144,15 +146,34 @@ instance {-# OVERLAPS #-} Show (Fix ExprF) where
 
 getPosition :: Expr -> Position
 getPosition (Fix x) = case x of
-  Var pos _ _ -> pos
-  App pos _ _ -> pos
-  Lambda pos _ _ -> pos
+  Var pos _ _     -> pos
+  App pos _ _     -> pos
+  Lambda pos _ _  -> pos
   Let pos _ _ _ _ -> pos
-  Const pos _ -> pos
+  Const pos _     -> pos
 
 
-free :: Variable -> Int -> Expr -> Bool
-free x n0 expr = getAny $ runReader (cata alg expr) n0
+freeVars :: Expr -> Set (Variable, Int)
+freeVars expr = runReader (cata alg expr) M.empty
+  where
+    alg :: ExprF (Reader (Map Variable Int) (Set (Variable, Int))) -> Reader (Map Variable Int) (Set (Variable, Int))
+    alg = \case
+      Var _ x n -> do
+        bound <- asks (M.lookup x)
+        case bound of
+          Just m | m > n -> return S.empty
+          _ -> return (S.singleton (x, n))
+      Lambda _ x b ->
+        local (M.insertWith (+) x 1) b
+      Let _ _ x e b -> do
+        e' <- e
+        b' <- local (M.insertWith (+) x 1) b
+        return $ e' <> b'
+      other -> fold <$> sequence other
+
+
+isFreeVar :: Variable -> Int -> Expr -> Bool
+isFreeVar x n0 expr = getAny $ runReader (cata alg expr) n0
   where
     alg :: ExprF (Reader Int Any) -> Reader Int Any
     alg = \case

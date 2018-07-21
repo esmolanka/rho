@@ -11,11 +11,16 @@ module Types (module Types, Position) where
 import Control.Monad.Reader
 
 import Data.Foldable
+import Data.Functor.Compose
+import Data.Functor.Classes
+import Data.Functor.Classes.Generic
 import Data.Functor.Foldable (Fix(..), cata)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.String
 import Data.Text (Text, pack, unpack)
+
+import GHC.Generics
 
 import Language.Sexp.Located (Position)
 
@@ -103,10 +108,13 @@ data ExprF e
   | App    Position e e
   | Let    Position BindingKind Variable e e -- let α = e₁ in e₂
   | Const  Position Const
-  deriving (Eq, Ord, Functor, Foldable, Traversable)
+  deriving (Eq, Ord, Functor, Foldable, Traversable, Generic1)
 
-deriving instance {-# OVERLAPS #-} Eq (Fix ExprF)
-deriving instance {-# OVERLAPS #-} Ord (Fix ExprF)
+instance Eq1 ExprF where
+  liftEq = liftEqDefault
+
+instance Ord1 ExprF where
+  liftCompare = liftCompareDefault
 
 instance Show e => Show (ExprF e) where
   showsPrec n = \case
@@ -180,7 +188,16 @@ data TypeF e
 
   | TRowEmpty              -- ROW
   | TRowExtend Label e e e -- PRESENCE -> STAR -> ROW -> ROW
-  deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
+  deriving (Show, Eq, Ord, Functor, Foldable, Traversable, Generic1)
+
+instance Eq1 TypeF where
+  liftEq = liftEqDefault
+
+instance Ord1 TypeF where
+  liftCompare = liftCompareDefault
+
+instance Show1 TypeF where
+  liftShowsPrec = liftShowsPrecDefault
 
 instance Types Type where
   freeTyVars =
@@ -205,9 +222,6 @@ getRowTail =
     TVar v -> Just v
     other -> msum other
 
-deriving instance {-# OVERLAPS #-} Eq (Fix TypeF)
-deriving instance {-# OVERLAPS #-} Ord (Fix TypeF)
-deriving instance {-# OVERLAPS #-} Show (Fix TypeF)
 
 data TyScheme = TyScheme
   { tsForall :: [TyVar]

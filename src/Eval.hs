@@ -3,13 +3,16 @@
 
 module Eval where
 
-import Control.Arrow (first)
+import Control.Arrow (first, second)
 import Control.Monad.Reader
 
+import Data.Foldable
 import Data.Functor.Foldable (Fix(..), cata)
-
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Monoid
+import Data.Set (Set)
+import qualified Data.Set as S
 
 import Types
 
@@ -68,5 +71,88 @@ resolvePrimitives expr = runReader (cata alg expr) primitives
         return (Fix (Const pos c))
 
 
-normalize :: Expr -> Expr
-normalize = undefined
+freeVars :: Expr -> Set (Variable, Int)
+freeVars expr = runReader (cata alg expr) M.empty
+  where
+    alg :: ExprF (Reader (Map Variable Int) (Set (Variable, Int))) -> Reader (Map Variable Int) (Set (Variable, Int))
+    alg = \case
+      Var _ x n -> do
+        bound <- asks (M.lookup x)
+        case bound of
+          Just m | m > n -> return S.empty
+          _ -> return (S.singleton (x, n))
+      Lambda _ x b ->
+        local (M.insertWith (+) x 1) b
+      Let _ _ x e b -> do
+        e' <- e
+        b' <- local (M.insertWith (+) x 1) b
+        return $ e' <> b'
+      other -> fold <$> sequence other
+
+
+isFreeVar :: Variable -> Int -> Expr -> Bool
+isFreeVar x n0 expr = getAny $ runReader (cata alg expr) n0
+  where
+    alg :: ExprF (Reader Int Any) -> Reader Int Any
+    alg = \case
+      Var _ x' n' -> do
+        n <- ask
+        return $ Any (x == x' && n == n')
+      Lambda _ x' b ->
+        if x == x' then local succ b else b
+      Let _ _ x' e b -> do
+        e' <- e
+        b' <- if x == x' then local succ b else b
+        return $ e' <> b'
+      other -> fold <$> sequence other
+
+
+shift :: Int -> Variable -> Expr -> Expr
+shift d x e = runReader (cata alg e) 0
+  where
+    alg :: ExprF (Reader Int Expr) -> Reader Int Expr
+    alg = \case
+      Var pos x' n -> do
+        c <- ask
+        return $ Fix $ Var pos x' $
+          if x == x' && n >= c then n + d else n
+      Lambda pos x' b -> do
+        b' <- if x == x' then local succ b else b
+        return $ Fix $ Lambda pos x' b'
+      Let pos k x' e b -> do
+        e' <- e
+        b' <- if x == x' then local succ b else b
+        return $ Fix $ Let pos k x' e' b'
+      other -> Fix <$> sequence other
+
+
+subst :: Variable -> Int -> Expr -> Expr -> Expr
+subst x n0 sub0 expr = runReader (cata alg expr) (n0, sub0)
+  where
+    succIndex :: Reader (Int, Expr) a -> Reader (Int, Expr) a
+    succIndex = local (first succ)
+
+    shifted :: Int -> Variable -> Reader (Int, Expr) a -> Reader (Int, Expr) a
+    shifted d x = local (second (shift d x))
+
+    alg :: ExprF (Reader (Int, Expr) Expr) -> Reader (Int, Expr) Expr
+    alg = \case
+      Var pos x' n' -> do
+        (n, sub) <- ask
+        if x' == x && n' == n
+          then return sub
+          else return (Fix (Var pos x' n'))
+      Lambda pos x' b -> do
+        b' <- shifted 1 x' $
+          if x == x'
+          then succIndex b
+          else b
+        return (Fix (Lambda pos x' b'))
+      Let pos k x' e b -> do
+        e' <- e
+        b' <- shifted 1 x' $
+          if x == x'
+          then succIndex b
+          else b
+        return (Fix (Let pos k x' e' b'))
+      other -> Fix <$> sequence other

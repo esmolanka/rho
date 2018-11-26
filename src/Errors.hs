@@ -1,6 +1,7 @@
 
 module Errors where
 
+import Expr
 import Types
 
 data TCError

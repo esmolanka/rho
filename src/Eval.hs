@@ -14,8 +14,7 @@ import Data.Monoid
 import Data.Set (Set)
 import qualified Data.Set as S
 
-import Types
-
+import Expr
 
 primitives :: Map Variable (Int, Const)
 primitives = M.fromList

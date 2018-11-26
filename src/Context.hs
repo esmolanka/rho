@@ -22,6 +22,7 @@ import qualified Data.Map as M
 -- import Data.Text.Lazy (fromStrict)
 -- import Text.PrettyPrint.Leijen.Text hiding (empty)
 
+import Expr (Variable)
 import Types
 
 

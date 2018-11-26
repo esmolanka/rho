@@ -24,6 +24,7 @@ library
     Sugared
     TypeChecker
     Types
+    Expr
 
   build-depends:
     base >= 4.7 && < 5, wl-pprint-text, containers, mtl, transformers-compat, text,

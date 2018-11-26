@@ -15,7 +15,6 @@ import Control.Monad.Free
 
 import Data.Coerce
 import Data.Functor.Foldable (Fix(..), futu)
-import Data.Semigroup
 import Data.Text (Text, unpack, isPrefixOf)
 import GHC.Generics
 
@@ -23,8 +22,9 @@ import Language.Sexp.Located (Position)
 import Language.SexpGrammar
 import Language.SexpGrammar.Generic
 
-import qualified Types as Raw
-import Types hiding (ExprF(..), Const(..))
+import qualified Expr as Raw
+import Expr hiding (ExprF(..), Const(..))
+import Types
 import Eval
 
 data Literal

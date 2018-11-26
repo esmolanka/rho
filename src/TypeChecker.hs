@@ -14,6 +14,7 @@ import Control.Monad.Reader
 import Data.Functor.Foldable (cata, para, Fix (..))
 import qualified Data.Set as S
 
+import Expr
 import Types
 import Context (Context)
 import qualified Context as Ctx
@@ -234,7 +235,6 @@ inferKind = cata (alg <=< sequence)
       TRowExtend _
          Presence Star Row -> return Row
       other                -> throwError (TCError ?pos (IllKindedType other))
-
 
 type InferM = ExceptT TCError (StateT FreshSupply (Reader Context))
 
